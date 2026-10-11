@@ -72,11 +72,28 @@ pub fn clean_bridges(lines: &[String]) -> Vec<String> {
         .collect()
 }
 
+fn control_dir() -> PathBuf {
+    dirs::runtime_dir()
+        .map(|d| d.join(format!("poezibrowse-{}", std::process::id())))
+        .unwrap_or_else(|| config::data_dir().join("tor"))
+}
+
+fn control_socket() -> PathBuf {
+    control_dir().join("control")
+}
+
+fn control_cookie() -> PathBuf {
+    control_dir().join("control.cookie")
+}
+
 pub fn torrc(config: &Config, port: u16, data_dir: &std::path::Path) -> Result<String, String> {
     let mut rc = format!(
-        "DataDirectory {}\nSocksPort 127.0.0.1:{port}\nLog notice stdout\nAvoidDiskWrites 1\nClientOnly 1\n__OwningControllerProcess {}\n",
+        "DataDirectory \"{}\"\nSocksPort 127.0.0.1:{port}\nLog notice stdout\nAvoidDiskWrites 1\nClientOnly 1\n__OwningControllerProcess {}\n\
+         ControlSocket \"{}\"\nCookieAuthentication 1\nCookieAuthFile \"{}\"\n",
         data_dir.display(),
-        std::process::id()
+        std::process::id(),
+        control_socket().display(),
+        control_cookie().display()
     );
     if config.tor_use_bridges {
         let bridges = clean_bridges(&config.tor_bridges);
@@ -161,6 +178,10 @@ impl Tor {
                 return;
             }
         };
+        if let Err(e) = config::private_dir(&control_dir()) {
+            self.set_status(fail(e.to_string()));
+            return;
+        }
         let rc_path = dir.join("torrc");
         if let Err(e) = config::write_private(&rc_path, rc.as_bytes()) {
             self.set_status(fail(e.to_string()));
@@ -235,6 +256,7 @@ impl Tor {
             let _ = child.kill();
             let _ = child.wait();
         }
+        let _ = std::fs::remove_dir_all(control_dir());
         self.set_status(Status::default());
     }
 }
@@ -245,7 +267,142 @@ impl Drop for Tor {
             let _ = child.kill();
             let _ = child.wait();
         }
+        let _ = std::fs::remove_dir_all(control_dir());
     }
+}
+
+pub struct Relay {
+    pub role: String,
+    pub nickname: String,
+    pub fingerprint: String,
+    pub ip: Option<String>,
+    pub country: Option<String>,
+}
+
+pub fn flag(country: &str) -> String {
+    country
+        .to_ascii_uppercase()
+        .chars()
+        .filter(|c| c.is_ascii_uppercase())
+        .filter_map(|c| char::from_u32(0x1F1E6 + (c as u32 - 'A' as u32)))
+        .collect()
+}
+
+struct Control {
+    reader: BufReader<std::os::unix::net::UnixStream>,
+    writer: std::os::unix::net::UnixStream,
+}
+
+impl Control {
+    fn connect() -> Result<Control, String> {
+        let stream = std::os::unix::net::UnixStream::connect(control_socket()).map_err(|e| format!("Tor-Steuerung nicht erreichbar: {e}"))?;
+        stream.set_read_timeout(Some(Duration::from_secs(10))).map_err(|e| e.to_string())?;
+        let writer = stream.try_clone().map_err(|e| e.to_string())?;
+        let mut control = Control { reader: BufReader::new(stream), writer };
+        let cookie = std::fs::read(control_cookie()).map_err(|e| e.to_string())?;
+        let hex: String = cookie.iter().map(|b| format!("{b:02X}")).collect();
+        control.command(&format!("AUTHENTICATE {hex}"))?;
+        Ok(control)
+    }
+
+    fn command(&mut self, command: &str) -> Result<Vec<String>, String> {
+        use std::io::Write;
+        if command.contains(['\r', '\n']) {
+            return Err("ungültiger Befehl".into());
+        }
+        self.writer.write_all(format!("{command}\r\n").as_bytes()).map_err(|e| e.to_string())?;
+        let mut lines = Vec::new();
+        loop {
+            let mut line = String::new();
+            if self.reader.read_line(&mut line).map_err(|e| e.to_string())? == 0 {
+                return Err("Tor hat die Verbindung geschlossen".into());
+            }
+            let line = line.trim_end_matches(['\r', '\n']).to_string();
+            let is_final = line.len() >= 4 && line.as_bytes()[3] == b' ' && line[..3].chars().all(|c| c.is_ascii_digit());
+            if is_final {
+                if !line.starts_with('2') {
+                    return Err(line);
+                }
+                return Ok(lines);
+            }
+            lines.push(line);
+        }
+    }
+
+    fn info(&mut self, key: &str) -> Result<Vec<String>, String> {
+        let lines = self.command(&format!("GETINFO {key}"))?;
+        let mut values = Vec::new();
+        for line in lines {
+            if let Some(rest) = line.strip_prefix(&format!("250-{key}=")) {
+                if !rest.is_empty() {
+                    values.push(rest.to_string());
+                }
+            } else if line.starts_with(&format!("250+{key}=")) || line == "." {
+                continue;
+            } else {
+                values.push(line);
+            }
+        }
+        Ok(values)
+    }
+}
+
+pub fn circuit_for(host: &str) -> Result<Vec<Relay>, String> {
+    let mut control = Control::connect()?;
+    let streams = control.info("stream-status")?;
+    let wanted = streams.iter().rev().find_map(|line| {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let target = parts.get(3)?;
+        let target_host = target.rsplit_once(':').map_or(*target, |(h, _)| h);
+        (target_host == host).then(|| parts.get(2).map(|c| c.to_string())).flatten()
+    });
+    let circuits = control.info("circuit-status")?;
+    let built: Vec<Vec<&str>> = circuits.iter().map(|l| l.split_whitespace().collect::<Vec<_>>()).filter(|p| p.get(1) == Some(&"BUILT")).collect();
+    let circuit = wanted
+        .and_then(|id| built.iter().find(|p| p[0] == id))
+        .or_else(|| built.iter().rev().find(|p| p.iter().any(|f| *f == "PURPOSE=GENERAL")))
+        .ok_or("Noch keine fertige Tor-Verbindung")?;
+    let path: Vec<(String, String)> = circuit
+        .get(2)
+        .unwrap_or(&"")
+        .split(',')
+        .filter(|h| !h.is_empty())
+        .map(|hop| {
+            let hop = hop.trim_start_matches('$');
+            let (fp, nick) = hop.split_once(['~', '=']).unwrap_or((hop, ""));
+            (fp.to_string(), nick.to_string())
+        })
+        .collect();
+    let count = path.len();
+    let mut relays = Vec::new();
+    for (i, (fingerprint, nickname)) in path.into_iter().enumerate() {
+        let role = match (i, count) {
+            (0, _) => "Eingang (Guard)".to_string(),
+            (i, 3) if i == 2 => "Ausgang (Exit)".to_string(),
+            (i, n) if i == n - 1 => "Rendezvous (.onion)".to_string(),
+            _ => "Mitte".to_string(),
+        };
+        let ip = control
+            .info(&format!("ns/id/{fingerprint}"))
+            .ok()
+            .and_then(|lines| lines.into_iter().find(|l| l.starts_with("r ")))
+            .and_then(|r| r.split_whitespace().nth(6).map(String::from));
+        let country = ip.as_ref().and_then(|ip| {
+            control
+                .info(&format!("ip-to-country/{ip}"))
+                .ok()?
+                .into_iter()
+                .next()
+                .filter(|c| c.len() == 2 && c != "??")
+        });
+        relays.push(Relay { role, nickname, fingerprint, ip, country });
+    }
+    Ok(relays)
+}
+
+pub fn new_identity() -> Result<(), String> {
+    let mut control = Control::connect()?;
+    control.command("SIGNAL NEWNYM").map(|_| ())
 }
 
 #[cfg(test)]
@@ -265,6 +422,12 @@ mod tests {
         assert_eq!(bridge_transport(&clean[0]), Some("obfs4"));
         assert_eq!(bridge_transport(&clean[1]), None);
         assert_eq!(bridge_transport("[2001:db8::1]:443 FP"), None);
+    }
+
+    #[test]
+    fn flags() {
+        assert_eq!(flag("de"), "🇩🇪");
+        assert_eq!(flag("??"), "");
     }
 
     #[test]

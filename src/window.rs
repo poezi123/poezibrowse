@@ -11,12 +11,14 @@ use crate::app::App;
 use crate::config::{self, EngineKind, Mode};
 use crate::engine::{Page, PageEvent};
 use crate::sidebar::{self, Icon};
+use crate::storage::Shelf;
 use crate::tab::{Snapshot, Tab};
 use crate::titlebar::TitleBar;
 
 const TAB_TARGET: &str = "application/x-poezibrowse-tab";
 
 pub struct BrowserWindow {
+    me: Weak<BrowserWindow>,
     app: Rc<App>,
     pub window: gtk::ApplicationWindow,
     pub titlebar: TitleBar,
@@ -31,6 +33,7 @@ pub struct BrowserWindow {
     pub ram_label: gtk::Label,
     pub downloads: gtk::ListBox,
     password_button: gtk::Button,
+    circuit_button: gtk::Button,
     suggestions: gtk::ListStore,
     favorites_bar: gtk::Box,
     favorites: gtk::Box,
@@ -49,6 +52,7 @@ pub struct BrowserWindow {
     fullscreen: Cell<bool>,
     dragged_tab: Cell<Option<u64>>,
     syncing_toggles: Cell<bool>,
+    favorites_shelf: Cell<Shelf>,
 }
 
 impl BrowserWindow {
@@ -106,6 +110,12 @@ impl BrowserWindow {
         header.pack_end(&downloads_button);
         let password_button = icon_button("dialog-password-symbolic", "Passwörter");
         header.pack_end(&password_button);
+        let circuit_button = gtk::Button::new();
+        circuit_button.set_image(Some(&sidebar::image(&sidebar::TOR_ICON, scale)));
+        circuit_button.set_tooltip_text(Some("Tor-Verbindung dieser Seite anzeigen"));
+        circuit_button.set_valign(Align::Center);
+        circuit_button.set_no_show_all(true);
+        header.pack_end(&circuit_button);
 
         window.set_titlebar(Some(&header));
         let titlebar = TitleBar::install(&header, &app.config.borrow(), Mode::Normal);
@@ -249,7 +259,8 @@ impl BrowserWindow {
         root.pack_start(&body, true, true, 0);
         window.add(&root);
 
-        let this = Rc::new(BrowserWindow {
+        let this = Rc::new_cyclic(|me| BrowserWindow {
+            me: me.clone(),
             app: app.clone(),
             window,
             titlebar,
@@ -264,6 +275,7 @@ impl BrowserWindow {
             ram_label,
             downloads,
             password_button,
+            circuit_button,
             suggestions,
             favorites_bar,
             favorites,
@@ -282,6 +294,7 @@ impl BrowserWindow {
             fullscreen: Cell::new(false),
             dragged_tab: Cell::new(None),
             syncing_toggles: Cell::new(false),
+            favorites_shelf: Cell::new(Shelf::Normal),
         });
         this.connect_ui(&find_prev, &find_next, &find_close);
         this.connect_panels(&clear_history, &open_folder);
@@ -309,7 +322,7 @@ impl BrowserWindow {
         let w = self.weak();
         self.entry.connect_activate(move |entry| {
             with(&w, |w| {
-                let uri = config::resolve_input(&entry.text(), &w.app.config.borrow());
+                let uri = config::resolve_input_for(&entry.text(), &w.app.config.borrow(), w.current_mode());
                 w.load_in_current(&uri);
             })
         });
@@ -357,6 +370,9 @@ impl BrowserWindow {
                 crate::passwords::on_button_clicked(button, &uri);
             })
         });
+
+        let w = self.weak();
+        self.circuit_button.connect_clicked(move |button| with(&w, |w| w.show_circuit(button)));
 
         let w = self.weak();
         self.notebook.connect_switch_page(move |_, child, _| {
@@ -1047,7 +1063,7 @@ impl BrowserWindow {
         let web = uri.starts_with("http://") || uri.starts_with("https://");
         let (star, star_tip) = if !web {
             (None, None)
-        } else if self.app.storage.is_bookmarked(uri) {
+        } else if self.app.storage.is_bookmarked(self.current_mode().into(), uri) {
             (Some("starred-symbolic"), Some("Aus den Favoriten entfernen (Strg+D)"))
         } else {
             (Some("non-starred-symbolic"), Some("Zu den Favoriten hinzufügen (Strg+D)"))
@@ -1074,10 +1090,11 @@ impl BrowserWindow {
         if !(uri.starts_with("http://") || uri.starts_with("https://")) {
             return;
         }
-        if self.app.storage.is_bookmarked(&uri) {
-            self.app.storage.remove_bookmark(&uri);
+        let shelf = Shelf::from(tab.mode);
+        if self.app.storage.is_bookmarked(shelf, &uri) {
+            self.app.storage.remove_bookmark(shelf, &uri);
         } else {
-            self.app.storage.add_bookmark(&uri, &tab.title());
+            self.app.storage.add_bookmark(shelf, &uri, &tab.title());
         }
         self.app.bookmarks_changed();
     }
@@ -1106,7 +1123,7 @@ impl BrowserWindow {
         if text.is_empty() {
             return;
         }
-        for e in self.app.storage.suggest(text, 8) {
+        for e in self.app.storage.suggest(text, 8, self.current_mode().into()) {
             let title = if e.title.is_empty() { e.url.clone() } else { e.title.clone() };
             let markup = format!(
                 "{}  <span alpha=\"60%\" size=\"small\">{}</span>",
@@ -1204,7 +1221,8 @@ impl BrowserWindow {
             list.remove(&child);
         }
         let search = self.bookmarks_panel.search.as_ref().map(|s| s.text().to_lowercase()).unwrap_or_default();
-        for e in self.app.storage.bookmarks() {
+        let shelf = Shelf::from(self.current_mode());
+        for e in self.app.storage.bookmarks(shelf) {
             if !search.is_empty() && !e.title.to_lowercase().contains(&search) && !e.url.to_lowercase().contains(&search) {
                 continue;
             }
@@ -1217,9 +1235,18 @@ impl BrowserWindow {
             });
             let w = self.weak();
             let url = e.url.clone();
+            row.open.connect_button_release_event(move |_, event| {
+                if event.button() == 3 {
+                    with(&w, |w| w.rename_favorite(shelf, &url));
+                }
+                glib::Propagation::Proceed
+            });
+            row.open.set_tooltip_text(Some(&format!("{}\nRechtsklick: umbenennen", e.url)));
+            let w = self.weak();
+            let url = e.url.clone();
             row.remove.connect_clicked(move |_| {
                 with(&w, |w| {
-                    w.app.storage.remove_bookmark(&url);
+                    w.app.storage.remove_bookmark(shelf, &url);
                     w.app.bookmarks_changed();
                 })
             });
@@ -1276,13 +1303,19 @@ impl BrowserWindow {
         for child in self.favorites.children() {
             self.favorites.remove(&child);
         }
-        let bookmarks = self.app.storage.bookmarks();
+        let shelf = Shelf::from(self.current_mode());
+        self.favorites_shelf.set(shelf);
+        let bookmarks = self.app.storage.bookmarks(shelf);
         if bookmarks.is_empty() {
-            let hint = gtk::Label::new(Some("Favoriten hinzufügen: auf den ☆ in der Adressleiste klicken oder Strg+D drücken"));
+            let hint = gtk::Label::new(Some(if shelf == Shelf::Tor {
+                "Tor-Favoriten hinzufügen: im Tor-Tab auf den ☆ klicken oder Strg+D drücken"
+            } else {
+                "Favoriten hinzufügen: auf den ☆ in der Adressleiste klicken oder Strg+D drücken"
+            }));
             hint.style_context().add_class("favorites-hint");
             self.favorites.pack_start(&hint, false, false, 6);
         }
-        let favicons = self.app.favicon_database();
+        let favicons = if shelf == Shelf::Tor { None } else { self.app.favicon_database() };
         for e in bookmarks.into_iter().rev() {
             let button = gtk::Button::new();
             button.set_relief(gtk::ReliefStyle::None);
@@ -1335,7 +1368,8 @@ impl BrowserWindow {
 
     fn favorite_menu(self: &Rc<Self>, url: &str, event: &gtk::gdk::EventButton) {
         let menu = gtk::Menu::new();
-        let entries: [(&str, Box<dyn Fn(&Rc<BrowserWindow>, &str)>); 3] = [
+        let entries: [(&str, Box<dyn Fn(&Rc<BrowserWindow>, &str)>); 4] = [
+            ("Umbenennen …", Box::new(|w, url| w.rename_favorite(w.favorites_shelf.get(), url))),
             ("In neuem Tab öffnen", Box::new(|w, url| {
                 w.open_tab(url, false);
             })),
@@ -1343,7 +1377,7 @@ impl BrowserWindow {
                 w.open_tab_in(url, false, Mode::Private);
             })),
             ("Aus Favoriten entfernen", Box::new(|w, url| {
-                w.app.storage.remove_bookmark(url);
+                w.app.storage.remove_bookmark(w.favorites_shelf.get(), url);
                 w.app.bookmarks_changed();
             })),
         ];
@@ -1358,6 +1392,47 @@ impl BrowserWindow {
         menu.popup_at_pointer(Some(event));
     }
 
+    fn rename_favorite(self: &Rc<Self>, shelf: Shelf, url: &str) {
+        let current = self.app.storage.bookmarks(shelf).into_iter().find(|e| e.url == url).map(|e| e.title).unwrap_or_default();
+        let dialog = gtk::Dialog::with_buttons(
+            Some("Favorit umbenennen"),
+            Some(&self.window),
+            gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
+            &[("Abbrechen", gtk::ResponseType::Cancel), ("Speichern", gtk::ResponseType::Accept)],
+        );
+        dialog.set_default_response(gtk::ResponseType::Accept);
+        let entry = gtk::Entry::new();
+        entry.set_text(&current);
+        entry.set_activates_default(true);
+        entry.set_width_chars(36);
+        let hint = gtk::Label::new(Some(url));
+        hint.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        hint.style_context().add_class("dim-label");
+        let area = dialog.content_area();
+        area.set_spacing(8);
+        area.set_margin_top(12);
+        area.set_margin_bottom(6);
+        area.set_margin_start(12);
+        area.set_margin_end(12);
+        area.pack_start(&entry, false, false, 0);
+        area.pack_start(&hint, false, false, 0);
+        let w = self.weak();
+        let url = url.to_string();
+        dialog.connect_response(move |dialog, response| {
+            if response == gtk::ResponseType::Accept {
+                let title = entry.text().trim().to_string();
+                if !title.is_empty() {
+                    with(&w, |w| {
+                        w.app.storage.rename_bookmark(shelf, &url, &title);
+                        w.app.bookmarks_changed();
+                    });
+                }
+            }
+            dialog.close();
+        });
+        dialog.show_all();
+    }
+
     pub fn layout_changed(self: &Rc<Self>) {
         let config = self.app.config.borrow();
         let full = self.fullscreen.get();
@@ -1370,12 +1445,116 @@ impl BrowserWindow {
         }
     }
 
+    fn show_circuit(self: &Rc<Self>, button: &gtk::Button) {
+        let popover = gtk::Popover::new(Some(button));
+        popover.style_context().add_class("circuit");
+        let bx = gtk::Box::new(Orientation::Vertical, 10);
+        bx.set_margin_top(14);
+        bx.set_margin_bottom(14);
+        bx.set_margin_start(16);
+        bx.set_margin_end(16);
+        let host = self.current_tab().map(|t| t.uri()).and_then(|u| config::host_of(&u)).unwrap_or_default();
+        let title = gtk::Label::new(Some(&format!("Tor-Verbindung für {}", if host.is_empty() { "diese Seite" } else { &host })));
+        title.style_context().add_class("panel-title");
+        title.set_xalign(0.0);
+        bx.pack_start(&title, false, false, 0);
+        let body = gtk::Box::new(Orientation::Vertical, 8);
+        let spinner = gtk::Spinner::new();
+        spinner.start();
+        body.pack_start(&spinner, false, false, 6);
+        bx.pack_start(&body, false, false, 0);
+        let renew = gtk::Button::with_label("Neue Verbindung für diese Seite");
+        renew.style_context().add_class("suggested-action");
+        bx.pack_start(&renew, false, false, 4);
+        popover.add(&bx);
+        popover.show_all();
+        popover.popup();
+
+        let fill = {
+            let body = body.clone();
+            move |result: Result<Vec<crate::tor::Relay>, String>| {
+                for child in body.children() {
+                    body.remove(&child);
+                }
+                match result {
+                    Ok(relays) => {
+                        let grid = gtk::Grid::new();
+                        grid.set_column_spacing(14);
+                        grid.set_row_spacing(10);
+                        for (row, relay) in relays.iter().enumerate() {
+                            let role = gtk::Label::new(Some(&relay.role));
+                            role.set_xalign(0.0);
+                            role.style_context().add_class("dim-label");
+                            let flag = gtk::Label::new(Some(&relay.country.as_deref().map(crate::tor::flag).unwrap_or_else(|| "🌐".into())));
+                            flag.style_context().add_class("circuit-flag");
+                            let name = if relay.nickname.is_empty() { relay.fingerprint.chars().take(12).collect() } else { relay.nickname.clone() };
+                            let details = format!(
+                                "{}{}",
+                                relay.ip.clone().unwrap_or_else(|| "Brücke / unbekannte IP".into()),
+                                relay.country.as_deref().map(|c| format!(" · {}", c.to_uppercase())).unwrap_or_default()
+                            );
+                            let text = gtk::Box::new(Orientation::Vertical, 1);
+                            let name_label = gtk::Label::new(Some(&name));
+                            name_label.set_xalign(0.0);
+                            let details_label = gtk::Label::new(Some(&details));
+                            details_label.set_xalign(0.0);
+                            details_label.style_context().add_class("dim-label");
+                            details_label.set_selectable(true);
+                            text.pack_start(&name_label, false, false, 0);
+                            text.pack_start(&details_label, false, false, 0);
+                            text.set_tooltip_text(Some(&relay.fingerprint));
+                            grid.attach(&role, 0, row as i32, 1, 1);
+                            grid.attach(&flag, 1, row as i32, 1, 1);
+                            grid.attach(&text, 2, row as i32, 1, 1);
+                        }
+                        body.pack_start(&grid, false, false, 0);
+                    }
+                    Err(e) => {
+                        let label = gtk::Label::new(Some(&e));
+                        label.set_line_wrap(true);
+                        label.set_max_width_chars(40);
+                        body.pack_start(&label, false, false, 0);
+                    }
+                }
+                body.show_all();
+            }
+        };
+        let lookup_host = host.clone();
+        glib::MainContext::default().spawn_local(async move {
+            let result = gio::spawn_blocking(move || crate::tor::circuit_for(&lookup_host)).await.unwrap_or_else(|_| Err("Fehler".into()));
+            fill(result);
+        });
+
+        let w = self.weak();
+        let p = popover.clone();
+        renew.connect_clicked(move |_| {
+            let w = w.clone();
+            let p = p.clone();
+            glib::MainContext::default().spawn_local(async move {
+                let result = gio::spawn_blocking(crate::tor::new_identity).await.unwrap_or_else(|_| Err("Fehler".into()));
+                p.popdown();
+                if result.is_ok() {
+                    with(&w, |w| w.with_page(|page| page.reload(true)));
+                }
+            });
+        });
+    }
+
     pub fn tor_status_changed(&self) {
         self.update_mode_look(self.current_mode());
     }
 
     fn update_mode_look(&self, mode: Mode) {
         self.titlebar.set_mode(mode);
+        self.circuit_button.set_visible(mode == Mode::Tor);
+        if Shelf::from(mode) != self.favorites_shelf.get() {
+            if let Some(me) = self.me.upgrade() {
+                me.rebuild_favorites();
+                if me.panel_holder.is_visible() && me.panel_stack.visible_child_name().as_deref() == Some("bookmarks") {
+                    me.refresh_bookmarks_panel();
+                }
+            }
+        }
         match mode {
             Mode::Normal => self.mode_badge.hide(),
             Mode::Private => {

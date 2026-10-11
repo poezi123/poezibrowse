@@ -715,6 +715,11 @@ fn load_css() {
         .side-panel progressbar trough { min-height: 4px; border-radius: 999px; }
         .side-panel progressbar progress { min-height: 4px; border-radius: 999px; background-color: #13b5b1; }
         .tor-badge { background-color: alpha(#7d4698, 0.75); }
+        .circuit-flag { font-size: 1.5em; }
+        popover.circuit .panel-title { font-weight: 700; }
+        popover.circuit { background-color: #121722; color: #e3e7ee; border: 1px solid #262d3d; }
+        popover.circuit label.dim-label { color: #8f98a8; }
+        popover.circuit button.suggested-action { background-image: none; background-color: #7d4698; color: #fff; border: none; border-radius: 999px; }
         .tab-chip.private.active { box-shadow: inset 0 2px #c04fd0; background-color: #1d1526; }
         .tab-chip.tor.active { box-shadow: inset 0 2px #8f5bb0; background-color: #191a24; }
         .tab-chip.private, .tab-chip.tor { color: #c9b8d6; }

@@ -1,7 +1,7 @@
 use crate::app::App;
 use crate::config::{self, Config, EngineKind, Theme, SEARCH_ENGINES, WALLPAPER_PRESETS};
 use crate::memory;
-use crate::storage::Entry;
+use crate::storage::{Entry, Shelf};
 
 pub fn escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -242,14 +242,25 @@ fn wallpaper_css(config: &Config) -> Option<String> {
 
 fn start_page(app: &App) -> String {
     let config = app.config.borrow();
-    let mut tiles: Vec<Entry> = app.storage.bookmarks().into_iter().take(12).collect();
-    let mut heading = "Lesezeichen";
-    if tiles.is_empty() {
-        tiles = app.storage.most_visited(8);
-        heading = "Oft besucht";
-    }
+    let tiles_html = favorite_tiles(app, Shelf::Normal);
+    let wall = wallpaper_css(&config);
+    layout_with(
+        "Neuer Tab",
+        "start",
+        if wall.is_some() { "wall" } else { "" },
+        &format!(
+            "{}<h1><span class=\"logo\">Poezi<span>Browse</span></span></h1>{}{tiles_html}\
+             <a class=\"corner\" href=\"poezi://settings#hintergrund\">Hintergrund ändern</a>",
+            wall.unwrap_or_default(),
+            search_form(&config)
+        ),
+    )
+}
+
+fn favorite_tiles(app: &App, shelf: Shelf) -> String {
+    let tiles: Vec<Entry> = app.storage.bookmarks(shelf).into_iter().rev().take(24).collect();
     let tiles_html = if tiles.is_empty() {
-        String::new()
+        "<h2>Favoriten</h2><p class=\"muted\">Noch keine Favoriten. Klicke auf den ☆ in der Adressleiste oder drücke Strg+D.</p>".to_string()
     } else {
         let items: String = tiles
             .iter()
@@ -263,20 +274,9 @@ fn start_page(app: &App) -> String {
                 )
             })
             .collect();
-        format!("<h2>{heading}</h2><div class=\"tiles\">{items}</div>")
+        format!("<h2>Favoriten</h2><div class=\"tiles\">{items}</div>")
     };
-    let wall = wallpaper_css(&config);
-    layout_with(
-        "Neuer Tab",
-        "start",
-        if wall.is_some() { "wall" } else { "" },
-        &format!(
-            "{}<h1><span class=\"logo\">Poezi<span>Browse</span></span></h1>{}{tiles_html}\
-             <a class=\"corner\" href=\"poezi://settings#hintergrund\">Hintergrund ändern</a>",
-            wall.unwrap_or_default(),
-            search_form(&config)
-        ),
-    )
+    tiles_html
 }
 
 fn history_page(app: &App, params: &[(String, String)], authorized: bool) -> String {
@@ -335,10 +335,10 @@ fn history_page(app: &App, params: &[(String, String)], authorized: bool) -> Str
 fn bookmarks_page(app: &App, params: &[(String, String)], authorized: bool) -> String {
     if authorized {
         if let Some(url) = param(params, "remove") {
-            app.storage.remove_bookmark(url);
+            app.storage.remove_bookmark(Shelf::Normal, url);
         }
     }
-    let entries = app.storage.bookmarks();
+    let entries = app.storage.bookmarks(Shelf::Normal);
     let token = &app.token;
     let mut body = String::from("<h1>Lesezeichen</h1><div class=\"list\">");
     if entries.is_empty() {
@@ -370,12 +370,13 @@ fn tor_page(app: &App) -> String {
     } else if status.ready() {
         "<p class=\"badge-ok\">Verbunden mit dem Tor-Netzwerk.</p>\
          <p>Alles in Tor-Tabs läuft über Tor. Nichts wird gespeichert, und beim Schließen des letzten Tor-Tabs wird alles vergessen.</p>\
-         <form class=\"search\" action=\"https://duckduckgo.com/\" method=\"get\"><input type=\"search\" name=\"q\" placeholder=\"Über Tor mit DuckDuckGo suchen\" autofocus></form>\
+         <form class=\"search\" action=\"https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/\" method=\"get\"><input type=\"search\" name=\"q\" placeholder=\"Über Tor mit DuckDuckGo (.onion) suchen\" autofocus></form>\
          <h2>Prüfen</h2><p><a href=\"https://check.torproject.org/\">check.torproject.org</a> · \
          <a href=\"https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/\">DuckDuckGo als .onion</a></p>\
          <h2>Gut zu wissen</h2><p class=\"muted\">Tor versteckt deine IP-Adresse. Gegen Browser-Fingerprinting schützt der Tor Browser \
          besser als PoeziBrowse. Wenn es um deine Sicherheit geht (Journalismus, Aktivismus), nimm den Tor Browser.</p>"
             .to_string()
+            + &favorite_tiles(app, Shelf::Tor)
     } else if status.running {
         format!(
             "<p>Verbinde mit dem Tor-Netzwerk …</p><div class=\"progress\"><div style=\"width:{}%\"></div></div><p class=\"muted\">{} % · {}</p>",

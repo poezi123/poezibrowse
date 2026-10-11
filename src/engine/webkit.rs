@@ -364,6 +364,18 @@ impl WebKitPage {
         let s = sink.clone();
         v.connect_decide_policy(move |_, decision, kind| decide_policy(&s, decision, kind));
 
+        v.connect_button_press_event(|view, event| match event.button() {
+            8 => {
+                view.go_back();
+                glib::Propagation::Stop
+            }
+            9 => {
+                view.go_forward();
+                glib::Propagation::Stop
+            }
+            _ => glib::Propagation::Proceed,
+        });
+
         v.connect_scroll_event(|view, event| {
             if !event.state().contains(gtk::gdk::ModifierType::CONTROL_MASK) {
                 return glib::Propagation::Proceed;

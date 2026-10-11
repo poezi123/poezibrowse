@@ -107,7 +107,7 @@ impl Default for Config {
             search_engine: "duckduckgo".into(),
             engine: EngineKind::Webkit,
             tab_sleep_minutes: 10,
-            tabs_per_process: 4,
+            tabs_per_process: 6,
             memory_limit_mb: 1024,
             ram_budget_mb: 1536,
             saver_mode: true,
@@ -254,6 +254,16 @@ pub fn url_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+pub const TOR_SEARCH: &str = "https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/?q={}";
+
+pub fn resolve_input_for(input: &str, config: &Config, mode: Mode) -> String {
+    let resolved = resolve_input(input, config);
+    if mode == Mode::Tor && resolved == config.search_url(input.trim()) && !input.trim().is_empty() {
+        return TOR_SEARCH.replace("{}", &url_encode(input.trim()));
+    }
+    resolved
+}
+
 pub fn resolve_input(input: &str, config: &Config) -> String {
     let input = input.trim();
     if input.is_empty() {
@@ -308,6 +318,8 @@ mod tests {
         assert_eq!(resolve_input("rust lang", &c), "https://duckduckgo.com/?q=rust+lang");
         assert_eq!(resolve_input("rust", &c), "https://duckduckgo.com/?q=rust");
         assert_eq!(resolve_input("/etc/hosts", &c), "file:///etc/hosts");
+        assert!(resolve_input_for("rust lang", &c, Mode::Tor).contains(".onion/?q=rust+lang"));
+        assert_eq!(resolve_input_for("example.com", &c, Mode::Tor), "https://example.com");
     }
 
     #[test]

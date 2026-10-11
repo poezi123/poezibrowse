@@ -4,6 +4,27 @@ use rusqlite::{params, Connection};
 
 use crate::config;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shelf {
+    Normal,
+    Tor,
+}
+
+impl Shelf {
+    fn table(self) -> &'static str {
+        match self {
+            Shelf::Normal => "bookmarks",
+            Shelf::Tor => "tor_bookmarks",
+        }
+    }
+}
+
+impl From<crate::config::Mode> for Shelf {
+    fn from(mode: crate::config::Mode) -> Shelf {
+        if mode == crate::config::Mode::Tor { Shelf::Tor } else { Shelf::Normal }
+    }
+}
+
 pub struct Entry {
     pub url: String,
     pub title: String,
@@ -49,6 +70,8 @@ impl Storage {
                  visits INTEGER NOT NULL DEFAULT 1, last_visit INTEGER NOT NULL);
              CREATE INDEX IF NOT EXISTS history_last ON history(last_visit);
              CREATE TABLE IF NOT EXISTS bookmarks (
+                 url TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', added INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS tor_bookmarks (
                  url TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', added INTEGER NOT NULL);",
         );
         Storage { db }
@@ -66,8 +89,15 @@ impl Storage {
         );
     }
 
-    pub fn suggest(&self, text: &str, limit: usize) -> Vec<Entry> {
+    pub fn suggest(&self, text: &str, limit: usize, shelf: Shelf) -> Vec<Entry> {
         let pattern = format!("%{}%", text.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
+        if shelf == Shelf::Tor {
+            return self.query(
+                "SELECT url, title, added FROM tor_bookmarks WHERE url LIKE ?1 ESCAPE '\\' OR title LIKE ?1 ESCAPE '\\'
+                 ORDER BY added DESC LIMIT ?2",
+                params![pattern, limit as i64],
+            );
+        }
         let sql = "SELECT url, title, last_visit FROM (
                        SELECT url, title, added AS last_visit, 1000000 AS score FROM bookmarks
                        UNION ALL
@@ -87,13 +117,6 @@ impl Storage {
         )
     }
 
-    pub fn most_visited(&self, limit: usize) -> Vec<Entry> {
-        self.query(
-            "SELECT url, title, last_visit FROM history ORDER BY visits DESC, last_visit DESC LIMIT ?1",
-            params![limit as i64],
-        )
-    }
-
     pub fn delete_history_entry(&self, url: &str) {
         let _ = self.db.execute("DELETE FROM history WHERE url = ?1", params![url]);
     }
@@ -103,26 +126,32 @@ impl Storage {
         let _ = self.db.execute_batch("VACUUM");
     }
 
-    pub fn bookmarks(&self) -> Vec<Entry> {
-        self.query("SELECT url, title, added FROM bookmarks ORDER BY added DESC", [])
+    pub fn bookmarks(&self, shelf: Shelf) -> Vec<Entry> {
+        self.query(&format!("SELECT url, title, added FROM {} ORDER BY added DESC", shelf.table()), [])
     }
 
-    pub fn is_bookmarked(&self, url: &str) -> bool {
+    pub fn is_bookmarked(&self, shelf: Shelf, url: &str) -> bool {
         self.db
-            .query_row("SELECT 1 FROM bookmarks WHERE url = ?1", params![url], |_| Ok(()))
+            .query_row(&format!("SELECT 1 FROM {} WHERE url = ?1", shelf.table()), params![url], |_| Ok(()))
             .is_ok()
     }
 
-    pub fn add_bookmark(&self, url: &str, title: &str) {
+    pub fn add_bookmark(&self, shelf: Shelf, url: &str, title: &str) {
         let _ = self.db.execute(
-            "INSERT INTO bookmarks (url, title, added) VALUES (?1, ?2, ?3)
-             ON CONFLICT(url) DO UPDATE SET title = ?2",
+            &format!(
+                "INSERT INTO {} (url, title, added) VALUES (?1, ?2, ?3) ON CONFLICT(url) DO UPDATE SET title = ?2",
+                shelf.table()
+            ),
             params![url, title, now()],
         );
     }
 
-    pub fn remove_bookmark(&self, url: &str) {
-        let _ = self.db.execute("DELETE FROM bookmarks WHERE url = ?1", params![url]);
+    pub fn rename_bookmark(&self, shelf: Shelf, url: &str, title: &str) {
+        let _ = self.db.execute(&format!("UPDATE {} SET title = ?2 WHERE url = ?1", shelf.table()), params![url, title]);
+    }
+
+    pub fn remove_bookmark(&self, shelf: Shelf, url: &str) {
+        let _ = self.db.execute(&format!("DELETE FROM {} WHERE url = ?1", shelf.table()), params![url]);
     }
 
     fn query(&self, sql: &str, params: impl rusqlite::Params) -> Vec<Entry> {
@@ -151,10 +180,10 @@ mod tests {
         s.record_visit("https://example.com/", "Example");
         s.record_visit("poezi://start", "Neuer Tab");
         assert_eq!(s.history("", 10).len(), 2);
-        let hits = s.suggest("rust", 5);
+        let hits = s.suggest("rust", 5, Shelf::Normal);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].title, "Rust", "empty titles must not overwrite known ones");
-        assert!(s.suggest("100%", 5).is_empty());
+        assert!(s.suggest("100%", 5, Shelf::Normal).is_empty());
         s.clear_history();
         assert!(s.history("", 10).is_empty());
     }
@@ -162,11 +191,15 @@ mod tests {
     #[test]
     fn bookmarks() {
         let s = storage();
-        s.add_bookmark("https://a.org/", "A");
-        assert!(s.is_bookmarked("https://a.org/"));
+        s.add_bookmark(Shelf::Normal, "https://a.org/", "A");
+        assert!(s.is_bookmarked(Shelf::Normal, "https://a.org/"));
+        assert!(!s.is_bookmarked(Shelf::Tor, "https://a.org/"), "Tor favorites are separate");
         s.record_visit("https://a.org/x", "Ax");
-        assert_eq!(s.suggest("a.org", 5)[0].url, "https://a.org/", "bookmarks rank first");
-        s.remove_bookmark("https://a.org/");
-        assert!(!s.is_bookmarked("https://a.org/"));
+        assert_eq!(s.suggest("a.org", 5, Shelf::Normal)[0].url, "https://a.org/", "bookmarks rank first");
+        assert!(s.suggest("a.org", 5, Shelf::Tor).is_empty(), "Tor suggestions never show normal history");
+        s.add_bookmark(Shelf::Tor, "http://x.onion/", "X");
+        assert_eq!(s.bookmarks(Shelf::Tor).len(), 1);
+        s.remove_bookmark(Shelf::Normal, "https://a.org/");
+        assert!(!s.is_bookmarked(Shelf::Normal, "https://a.org/"));
     }
 }

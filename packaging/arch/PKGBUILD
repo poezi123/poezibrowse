@@ -1,6 +1,6 @@
 
 pkgname=poezibrowse
-pkgver=0.2.1
+pkgver=0.2.2
 pkgrel=1
 pkgdesc='Schlanker Webbrowser für Linux, geschrieben in Rust'
 arch=('x86_64')
