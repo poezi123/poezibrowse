@@ -8,7 +8,7 @@ use gtk::prelude::*;
 use webkit2gtk::{Download, DownloadExt, URIResponseExt, WebContextExt};
 
 use crate::blocker::Blocker;
-use crate::config::{Config, EngineKind};
+use crate::config::{Config, EngineKind, Theme};
 use crate::engine::webkit::{Blocking, PageHandle, WebKitEngine};
 use crate::engine::Page;
 use crate::session::{self, Session, TabState, WindowState};
@@ -29,6 +29,7 @@ pub struct App {
     next_tab_id: Cell<u64>,
     session_dirty: Cell<bool>,
     quitting: Cell<bool>,
+    system_dark: std::cell::OnceCell<bool>,
     me: Weak<App>,
 }
 
@@ -46,8 +47,24 @@ impl App {
             next_tab_id: Cell::new(1),
             session_dirty: Cell::new(false),
             quitting: Cell::new(false),
+            system_dark: std::cell::OnceCell::new(),
             me: me.clone(),
         })
+    }
+
+    pub fn apply_appearance(&self) {
+        let config = self.config.borrow();
+        if let Some(settings) = gtk::Settings::default() {
+            let system = *self.system_dark.get_or_init(|| settings.is_gtk_application_prefer_dark_theme());
+            settings.set_gtk_application_prefer_dark_theme(match config.theme {
+                Theme::System => system,
+                Theme::Light => false,
+                Theme::Dark => true,
+            });
+        }
+        for window in self.windows.borrow().iter() {
+            window.titlebar.apply(&config);
+        }
     }
 
     pub fn next_tab_id(&self) -> u64 {
@@ -57,7 +74,11 @@ impl App {
     }
 
     pub fn start(self: &Rc<Self>) {
+        for dir in [crate::config::config_dir(), crate::config::data_dir(), crate::config::cache_dir()] {
+            let _ = crate::config::private_dir(&dir);
+        }
         load_css();
+        self.apply_appearance();
         if self.config.borrow().block_ads {
             let blocker = Blocker::new();
             blocker.start();
@@ -387,14 +408,12 @@ impl App {
 }
 
 fn random_token() -> String {
-    use std::hash::{BuildHasher, Hasher};
-    let mut out = String::new();
-    for i in 0..2u64 {
-        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-        h.write_u64(i ^ std::process::id() as u64);
-        out.push_str(&format!("{:016x}", h.finish()));
-    }
-    out
+    use std::io::Read;
+    let mut bytes = [0u8; 32];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut bytes))
+        .expect("/dev/urandom is not readable");
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn window_page_num(window: &Rc<BrowserWindow>, tab: &Rc<crate::tab::Tab>) -> Option<u32> {
@@ -423,14 +442,61 @@ fn load_css() {
     let css = gtk::CssProvider::new();
     let _ = css.load_from_data(
         br#"
-        .sleeping { opacity: 0.55; }
+        window.poezi { background-color: #0b0e14; }
+        headerbar.poezi { background: none; background-color: transparent; border: none; box-shadow: none;
+                          min-height: 46px; padding: 0 8px; }
+        headerbar.poezi button { color: #e8ecf2; background: none; border: none; box-shadow: none; text-shadow: none;
+                                 -gtk-icon-shadow: none; border-radius: 10px; min-height: 30px; min-width: 30px;
+                                 transition: background-color 150ms ease; }
+        headerbar.poezi button:hover { background-color: alpha(#ffffff, 0.10); }
+        headerbar.poezi button:active, headerbar.poezi button:checked { background-color: alpha(#ffffff, 0.18); }
+        headerbar.poezi button:disabled { color: alpha(#e8ecf2, 0.32); background: none; }
+        headerbar.poezi button.titlebutton { border-radius: 999px; min-height: 26px; min-width: 26px; padding: 0; }
+        headerbar.poezi button.titlebutton.close:hover { background-color: #d9485f; color: #ffffff; }
+        headerbar.poezi .linked > button { border-radius: 10px; }
+        headerbar.poezi entry { background-color: alpha(#03060c, 0.62); background-image: none; color: #f1f4f8;
+                                border: 1px solid alpha(#ffffff, 0.14); border-radius: 999px; min-height: 32px;
+                                padding: 0 14px; box-shadow: none; caret-color: #22c7c0;
+                                transition: border-color 150ms ease, background-color 150ms ease; }
+        headerbar.poezi entry:focus { border-color: #13b5b1; background-color: alpha(#03060c, 0.85);
+                                      box-shadow: 0 0 0 2px alpha(#13b5b1, 0.30); }
+        headerbar.poezi entry image { color: alpha(#e8ecf2, 0.72); }
+        headerbar.poezi entry image:hover { color: #ffffff; }
+        headerbar.poezi entry selection { background-color: alpha(#13b5b1, 0.55); color: #ffffff; }
+        headerbar.poezi entry progress { border: none; border-bottom: 2px solid #13b5b1; border-radius: 0;
+                                         background: none; box-shadow: none; }
+        headerbar.poezi entry placeholder { color: alpha(#e8ecf2, 0.45); }
+        .private-badge { color: #ffffff; background-color: alpha(#b04bb3, 0.55); border-radius: 999px;
+                         padding: 3px 10px; font-weight: 600; font-size: 0.9em; margin: 0 4px; }
+
+        notebook.poezi { background-color: #0b0e14; }
+        notebook.poezi > header { background-color: #0b0e14; background-image: none; border: none;
+                                  box-shadow: inset 0 -1px #1b2130; padding: 5px 6px 0 6px; }
+        notebook.poezi > header > tabs > tab { background: none; color: #8f98a8; border: none; box-shadow: none;
+                                               border-radius: 10px 10px 0 0; padding: 5px 10px; margin: 0 2px;
+                                               min-height: 0; outline: none; transition: background-color 150ms ease, color 150ms ease; }
+        notebook.poezi > header > tabs > tab:hover { background-color: alpha(#ffffff, 0.05); color: #dfe4ec; }
+        notebook.poezi > header > tabs > tab:checked { background-color: #161b26; color: #ffffff;
+                                                       box-shadow: inset 0 2px #13b5b1; }
+        notebook.poezi > header > tabs > tab button { color: inherit; background: none; border: none; box-shadow: none;
+                                                      padding: 0; min-height: 18px; min-width: 18px; border-radius: 999px; }
+        notebook.poezi > header > tabs > tab button:hover { background-color: alpha(#ffffff, 0.12); }
+        notebook.poezi > header > tabs > arrow { color: #8f98a8; background: none; border: none; }
+        notebook.poezi > header button { color: #c7cdd8; background: none; border: none; box-shadow: none; border-radius: 8px; }
+        notebook.poezi > header button:hover { background-color: alpha(#ffffff, 0.10); color: #ffffff; }
+        notebook.poezi > header label.dim-label { color: #9aa3b2; font-size: 0.9em; margin-right: 4px; }
+        notebook.poezi > stack { background-color: #0b0e14; }
+        notebook.poezi > stack label.dim-label { color: #8f98a8; }
+        notebook.poezi > stack button { border-radius: 999px; padding: 6px 18px; }
+
+        .sleeping { opacity: 0.5; }
         .sleeping label { font-style: italic; }
-        headerbar.private { background-image: none; background-color: #3b2366; color: #fff; }
-        headerbar.private entry { background-color: rgba(255,255,255,0.12); color: #fff; }
-        .link-status { background-color: @theme_bg_color; border: 1px solid @borders;
-                       border-radius: 0 6px 0 0; padding: 2px 8px; font-size: 0.9em; }
-        notebook > header.top > tabs > tab { padding: 2px 6px; min-height: 0; }
-        notebook > header.top > tabs > tab button { padding: 0; min-height: 18px; min-width: 18px; }
+        .link-status { background-color: #161b26; color: #dfe4ec; border: 1px solid #262d3d;
+                       border-radius: 0 8px 0 0; padding: 3px 10px; font-size: 0.9em; }
+        .findbar { background-color: #0f131b; }
+        revealer > .findbar { border-top: 1px solid #1b2130; }
+        .findbar entry { border-radius: 999px 0 0 999px; }
+        .findbar button { color: #c7cdd8; }
         "#,
     );
     if let Some(screen) = gtk::gdk::Screen::default() {

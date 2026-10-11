@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::config::{self, Config, EngineKind, SEARCH_ENGINES};
+use crate::config::{self, Config, EngineKind, Theme, SEARCH_ENGINES};
 use crate::memory;
 use crate::storage::Entry;
 
@@ -21,7 +21,7 @@ pub fn escape(s: &str) -> String {
 const STYLE: &str = r#"
 :root { --bg:#f6f7f9; --fg:#1d2128; --muted:#69707d; --card:#fff; --line:#e2e5ea; --accent:#0E9C92; --accent2:#7C42DE; --danger:#c43c3c; }
 @media (prefers-color-scheme: dark) {
-  :root { --bg:#16181d; --fg:#e7e9ee; --muted:#959cab; --card:#1f2229; --line:#2e323b; }
+  :root { --bg:#0b0e14; --fg:#e8ecf2; --muted:#8f98a8; --card:#121722; --line:#1f2633; --accent:#13b5b1; }
 }
 * { box-sizing: border-box; }
 body { margin:0; font: 15px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
@@ -78,6 +78,7 @@ table.stats td:last-child { text-align: right; font-variant-numeric: tabular-num
 pub fn layout(title: &str, class: &str, body: &str) -> String {
     format!(
         "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">\
+         <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action poezi: https:; base-uri 'none'\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
          <meta name=\"color-scheme\" content=\"light dark\"><title>{}</title><style>{STYLE}</style></head>\
          <body><main class=\"{class}\">{body}</main></body></html>",
@@ -314,6 +315,14 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         c.autoplay_sound = flag("autoplay_sound");
         c.hardware_acceleration = flag("hardware_acceleration");
         c.download_dir = text("download_dir").unwrap_or_default();
+        c.theme = match text("theme").as_deref() {
+            Some("light") => Theme::Light,
+            Some("dark") => Theme::Dark,
+            _ => Theme::System,
+        };
+        c.titlebar_pattern = flag("titlebar_pattern");
+        c.titlebar_animation = flag("titlebar_animation");
+        c.titlebar_fps = number("titlebar_fps", 1, 60, c.titlebar_fps);
         c.block_allowlist = text("block_allowlist")
             .unwrap_or_default()
             .lines()
@@ -322,6 +331,7 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
             .collect();
         c.save();
         *app.config.borrow_mut() = c;
+        app.apply_appearance();
         notice = "<div class=\"notice\">Gespeichert. Mit * markierte Einstellungen wirken nach einem Neustart von PoeziBrowse.</div>".into();
     }
 
@@ -361,14 +371,47 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         row("Standard-Zoom (%)", "", format!("<input type=\"number\" min=\"30\" max=\"300\" name=\"default_zoom\" value=\"{}\">", (c.default_zoom * 100.0).round())),
         row("Download-Ordner", "Leer = Standard-Downloadordner", format!("<input type=\"text\" name=\"download_dir\" value=\"{}\" placeholder=\"{}\">", escape(&c.download_dir), escape(&c.download_dir().to_string_lossy()))),
     ];
+    let theme_option = |value: &str, label: &str, theme: Theme| {
+        format!("<option value=\"{value}\"{}>{label}</option>", if c.theme == theme { " selected" } else { "" })
+    };
+    let appearance = [
+        row(
+            "Erscheinungsbild",
+            "Für Menüs, Dialoge und Seiten, die hell und dunkel können",
+            format!(
+                "<select name=\"theme\">{}{}{}</select>",
+                theme_option("system", "Wie das System", Theme::System),
+                theme_option("light", "Hell", Theme::Light),
+                theme_option("dark", "Dunkel", Theme::Dark)
+            ),
+        ),
+        row(
+            "Muster in der Fensterleiste",
+            "Die Höhenlinien hinter Adressleiste und Fensterknöpfen. Ohne sie bleibt der Farbverlauf.",
+            format!("<input type=\"checkbox\" name=\"titlebar_pattern\"{}>", checked(c.titlebar_pattern)),
+        ),
+        row(
+            "Muster bewegen",
+            "Die Linien wandern langsam durch die Leiste. Kostet ein wenig Rechenzeit.",
+            format!("<input type=\"checkbox\" name=\"titlebar_animation\"{}>", checked(c.titlebar_animation)),
+        ),
+        row(
+            "Bilder je Sekunde",
+            "Wie oft die Leiste neu gezeichnet wird. Die Geschwindigkeit bleibt gleich – mehr heißt glatter und teurer.",
+            format!("<input type=\"number\" min=\"1\" max=\"60\" name=\"titlebar_fps\" value=\"{}\">", c.titlebar_fps),
+        ),
+    ];
     layout(
         "Einstellungen",
         "",
         &format!(
             "<h1>Einstellungen</h1>{notice}<form action=\"poezi://settings\" method=\"get\">\
              <input type=\"hidden\" name=\"token\" value=\"{}\"><input type=\"hidden\" name=\"save\" value=\"1\">\
-             <div class=\"settings\">{}</div><p><button type=\"submit\">Speichern</button></p></form>",
+             <h2>Erscheinungsbild</h2><div class=\"settings\">{}</div>\
+             <h2>Browser</h2><div class=\"settings\">{}</div>\
+             <p><button type=\"submit\">Speichern</button></p></form>",
             app.token,
+            appearance.concat(),
             rows.concat()
         ),
     )

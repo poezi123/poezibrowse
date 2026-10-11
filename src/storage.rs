@@ -25,13 +25,18 @@ fn worth_remembering(url: &str) -> bool {
 impl Storage {
     pub fn open() -> Storage {
         let dir = config::data_dir();
-        let _ = std::fs::create_dir_all(&dir);
-        let db = Connection::open(dir.join("places.sqlite"))
+        let _ = config::private_dir(&dir);
+        let path = dir.join("places.sqlite");
+        let db = Connection::open(&path)
             .or_else(|e| {
                 eprintln!("poezibrowse: history database unavailable ({e}), using memory");
                 Connection::open_in_memory()
             })
             .expect("sqlite in-memory database");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
         Self::with_connection(db)
     }
 

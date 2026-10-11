@@ -59,10 +59,9 @@ pub fn load() -> Session {
 
 pub fn save(session: &Session) {
     let dir = config::data_dir();
-    let _ = std::fs::create_dir_all(&dir);
     let Ok(json) = serde_json::to_string(session) else { return };
     let tmp = dir.join("session.json.tmp");
-    if std::fs::write(&tmp, json).is_ok() {
+    if config::write_private(&tmp, json.as_bytes()).is_ok() {
         let _ = std::fs::rename(&tmp, path());
     }
 }

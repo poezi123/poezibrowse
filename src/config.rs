@@ -57,6 +57,19 @@ pub struct Config {
     pub default_zoom: f64,
     pub download_dir: String,
     pub hardware_acceleration: bool,
+    pub theme: Theme,
+    pub titlebar_pattern: bool,
+    pub titlebar_animation: bool,
+    pub titlebar_fps: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    #[default]
+    System,
+    Light,
+    Dark,
 }
 
 impl Default for Config {
@@ -77,6 +90,10 @@ impl Default for Config {
             default_zoom: 1.0,
             download_dir: String::new(),
             hardware_acceleration: true,
+            theme: Theme::System,
+            titlebar_pattern: true,
+            titlebar_animation: true,
+            titlebar_fps: 16,
         }
     }
 }
@@ -98,15 +115,15 @@ impl Config {
             config.engine = EngineKind::Webkit;
         }
         config.tabs_per_process = config.tabs_per_process.max(1);
+        config.titlebar_fps = config.titlebar_fps.clamp(1, 60);
         config
     }
 
     pub fn save(&self) {
         let dir = config_dir();
-        let _ = std::fs::create_dir_all(&dir);
         match toml::to_string_pretty(self) {
             Ok(text) => {
-                if let Err(e) = std::fs::write(dir.join("config.toml"), text) {
+                if let Err(e) = write_private(&dir.join("config.toml"), text.as_bytes()) {
                     eprintln!("poezibrowse: could not save settings: {e}");
                 }
             }
@@ -135,6 +152,23 @@ impl Config {
             .iter()
             .any(|h| host == h || host.ends_with(&format!(".{h}")))
     }
+}
+
+pub fn private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(dir)?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+}
+
+pub fn write_private(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    if let Some(dir) = path.parent() {
+        private_dir(dir)?;
+    }
+    let mut file = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    file.write_all(data)
 }
 
 pub fn config_dir() -> PathBuf {

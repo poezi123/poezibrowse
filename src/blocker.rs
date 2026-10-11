@@ -70,7 +70,7 @@ fn dir() -> PathBuf {
 impl Blocker {
     pub fn new() -> Rc<Blocker> {
         let path = dir();
-        let _ = std::fs::create_dir_all(&path);
+        let _ = config::private_dir(&path);
         let c_path = CString::new(path.to_string_lossy().as_bytes()).unwrap_or_default();
         let store = unsafe { ffi::webkit_user_content_filter_store_new(c_path.as_ptr()) };
         Rc::new(Blocker { store, filters: RefCell::new(Vec::new()), on_ready: RefCell::new(Vec::new()) })

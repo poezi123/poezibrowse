@@ -8,6 +8,7 @@ mod passwords;
 mod session;
 mod storage;
 mod tab;
+mod titlebar;
 mod window;
 
 use gtk::gio;
@@ -35,6 +36,13 @@ fn main() -> gtk::glib::ExitCode {
         let uris: Vec<String> = files.iter().map(|f| f.uri().to_string()).collect();
         a.open_uris(&uris);
     });
+    for signal in [1, 2, 15] {
+        let gtk_app = gtk_app.clone();
+        gtk::glib::unix_signal_add_local(signal, move || {
+            gtk_app.quit();
+            gtk::glib::ControlFlow::Break
+        });
+    }
     let code = gtk_app.run();
     drop(app);
     code

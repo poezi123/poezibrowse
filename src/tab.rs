@@ -42,7 +42,7 @@ impl Tab {
         title.set_width_chars(14);
         title.set_max_width_chars(22);
         title.set_xalign(0.0);
-        title.set_hexpand(true);
+        title.set_hexpand(false);
         let audio = gtk::Button::from_icon_name(Some("audio-volume-high-symbolic"), gtk::IconSize::Menu);
         audio.set_relief(gtk::ReliefStyle::None);
         audio.set_tooltip_text(Some("Stummschalten"));

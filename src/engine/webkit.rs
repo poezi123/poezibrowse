@@ -89,7 +89,8 @@ impl WebKitEngine {
         });
 
         let settings = Settings::new();
-        settings.set_user_agent_with_application_details(Some(config::APP_NAME), Some(config::VERSION));
+        settings.set_enable_hyperlink_auditing(false);
+        settings.set_enable_dns_prefetching(false);
         settings.set_enable_developer_extras(true);
         settings.set_enable_smooth_scrolling(true);
         settings.set_enable_back_forward_navigation_gestures(true);

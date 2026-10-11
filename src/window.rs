@@ -11,12 +11,13 @@ use crate::app::App;
 use crate::config::{self, EngineKind};
 use crate::engine::{Page, PageEvent};
 use crate::tab::{Snapshot, Tab};
+use crate::titlebar::TitleBar;
 
 pub struct BrowserWindow {
     app: Rc<App>,
     pub window: gtk::ApplicationWindow,
     pub private: bool,
-    header: gtk::HeaderBar,
+    pub titlebar: TitleBar,
     back: gtk::Button,
     forward: gtk::Button,
     reload: gtk::Button,
@@ -43,9 +44,6 @@ impl BrowserWindow {
 
         let header = gtk::HeaderBar::new();
         header.set_show_close_button(true);
-        if private {
-            header.style_context().add_class("private");
-        }
 
         let nav = gtk::Box::new(Orientation::Horizontal, 0);
         nav.style_context().add_class("linked");
@@ -56,6 +54,12 @@ impl BrowserWindow {
         let reload = icon_button("view-refresh-symbolic", "Neu laden (Strg+R)");
         header.pack_start(&nav);
         header.pack_start(&reload);
+        if private {
+            let badge = gtk::Label::new(Some("Privat"));
+            badge.style_context().add_class("private-badge");
+            badge.set_valign(Align::Center);
+            header.pack_start(&badge);
+        }
 
         let entry = gtk::Entry::new();
         entry.set_hexpand(true);
@@ -110,10 +114,13 @@ impl BrowserWindow {
         header.pack_end(&password_button);
 
         window.set_titlebar(Some(&header));
+        let titlebar = TitleBar::install(&header, &app.config.borrow(), private);
+        window.style_context().add_class("poezi");
 
         let notebook = gtk::Notebook::new();
         notebook.set_scrollable(true);
         notebook.set_show_border(false);
+        notebook.style_context().add_class("poezi");
         notebook.set_group_name(Some("poezibrowse-tabs"));
         let end = gtk::Box::new(Orientation::Horizontal, 6);
         let ram_label = gtk::Label::new(None);
@@ -157,6 +164,7 @@ impl BrowserWindow {
         linked.add(&find_next);
         find_box.pack_start(&linked, false, false, 0);
         find_box.pack_end(&find_close, false, false, 0);
+        find_box.style_context().add_class("findbar");
         let find_revealer = gtk::Revealer::new();
         find_revealer.set_transition_type(gtk::RevealerTransitionType::SlideUp);
         find_revealer.add(&find_box);
@@ -170,7 +178,7 @@ impl BrowserWindow {
             app: app.clone(),
             window,
             private,
-            header,
+            titlebar,
             back,
             forward,
             reload,
