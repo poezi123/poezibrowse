@@ -364,12 +364,12 @@ fn tor_page(app: &App) -> String {
     let body = if let Some(error) = &status.error {
         format!(
             "<p class=\"badge-err\">{}</p><p>Prüfe die Tor-Einstellungen unter <a href=\"poezi://settings#tor\">Einstellungen</a> \
-             und öffne dann ein neues Tor-Fenster.</p>",
+             und öffne dann einen neuen Tor-Tab.</p>",
             escape(error)
         )
     } else if status.ready() {
         "<p class=\"badge-ok\">Verbunden mit dem Tor-Netzwerk.</p>\
-         <p>Alles in diesem Fenster läuft über Tor. Nichts wird gespeichert, und beim Schließen des letzten Tor-Fensters wird alles vergessen.</p>\
+         <p>Alles in Tor-Tabs läuft über Tor. Nichts wird gespeichert, und beim Schließen des letzten Tor-Tabs wird alles vergessen.</p>\
          <form class=\"search\" action=\"https://duckduckgo.com/\" method=\"get\"><input type=\"search\" name=\"q\" placeholder=\"Über Tor mit DuckDuckGo suchen\" autofocus></form>\
          <h2>Prüfen</h2><p><a href=\"https://check.torproject.org/\">check.torproject.org</a> · \
          <a href=\"https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/\">DuckDuckGo als .onion</a></p>\
@@ -384,7 +384,7 @@ fn tor_page(app: &App) -> String {
             escape(&status.summary)
         )
     } else {
-        "<p>Tor ist aus. Öffne ein neues Tor-Fenster, um dich zu verbinden.</p>".to_string()
+        "<p>Tor ist aus. Öffne einen neuen Tor-Tab, um dich zu verbinden.</p>".to_string()
     };
     layout("Tor", "", &format!("<h1><span class=\"logo\">Tor-<span>Modus</span></span></h1>{body}"))
         .replacen("<head>", &format!("<head>{refresh}"), 1)
@@ -542,7 +542,7 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
     let tor_rows = [
         row(
             "Tor",
-            "Tor-Fenster öffnest du über die Seitenleiste, das Menü oder Strg+Umschalt+U",
+            "Tor-Tabs öffnest du über die Seitenleiste, das Menü oder Strg+Umschalt+U",
             if tor_installed { "<span class=\"badge-ok\">✓ installiert</span>".into() } else { "<span class=\"badge-err\">nicht installiert – sudo pacman -S tor</span>".into() },
         ),
         row("JavaScript im Tor-Modus", "Aus ist sicherer, viele Seiten funktionieren dann aber nicht", format!("<input type=\"checkbox\" name=\"tor_javascript\"{}>", checked(c.tor_javascript))),

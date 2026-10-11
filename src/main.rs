@@ -33,25 +33,29 @@ fn main() -> gtk::glib::ExitCode {
     let a = app.clone();
     gtk_app.connect_startup(move |gtk_app| {
         set_accels(gtk_app);
-        for (name, mode) in [("new-window", config::Mode::Normal), ("new-private-window", config::Mode::Private), ("new-tor-window", config::Mode::Tor)] {
+        for (name, mode) in [("new-window", config::Mode::Normal), ("new-private-tab", config::Mode::Private), ("new-tor-tab", config::Mode::Tor)] {
             let action = gio::SimpleAction::new(name, None);
             let a = a.clone();
             action.connect_activate(move |_, _| {
-                a.new_window(mode, true);
+                if mode == config::Mode::Normal {
+                    a.new_window(true);
+                } else {
+                    a.open_mode_tab(mode);
+                }
             });
             gtk_app.add_action(&action);
         }
         a.start();
     });
     gtk_app.add_main_option("new-window", gtk::glib::Char::from(b'n'), gtk::glib::OptionFlags::NONE, gtk::glib::OptionArg::None, "Neues Fenster öffnen", None);
-    gtk_app.add_main_option("private-window", gtk::glib::Char::from(b'p'), gtk::glib::OptionFlags::NONE, gtk::glib::OptionArg::None, "Neues privates Fenster öffnen", None);
-    gtk_app.add_main_option("tor-window", gtk::glib::Char::from(b't'), gtk::glib::OptionFlags::NONE, gtk::glib::OptionArg::None, "Neues Tor-Fenster öffnen", None);
+    gtk_app.add_main_option("private", gtk::glib::Char::from(b'p'), gtk::glib::OptionFlags::NONE, gtk::glib::OptionArg::None, "Neuen privaten Tab öffnen", None);
+    gtk_app.add_main_option("tor", gtk::glib::Char::from(b't'), gtk::glib::OptionFlags::NONE, gtk::glib::OptionArg::None, "Neuen Tor-Tab öffnen", None);
     let a = app.clone();
     gtk_app.connect_handle_local_options(move |gtk_app, options| {
-        let action = if options.contains("tor-window") {
-            "new-tor-window"
-        } else if options.contains("private-window") {
-            "new-private-window"
+        let action = if options.contains("tor") {
+            "new-tor-tab"
+        } else if options.contains("private") {
+            "new-private-tab"
         } else if options.contains("new-window") {
             "new-window"
         } else {
@@ -94,8 +98,8 @@ fn set_accels(app: &gtk::Application) {
         ("win.close-tab", &["<Primary>w", "<Primary>F4"]),
         ("win.reopen-tab", &["<Primary><Shift>t"]),
         ("win.new-window", &["<Primary>n"]),
-        ("win.new-private-window", &["<Primary><Shift>p"]),
-        ("win.new-tor-window", &["<Primary><Shift>u"]),
+        ("win.new-private-tab", &["<Primary><Shift>p"]),
+        ("win.new-tor-tab", &["<Primary><Shift>u"]),
         ("win.move-tab-left", &["<Primary><Shift>Page_Up"]),
         ("win.move-tab-right", &["<Primary><Shift>Page_Down"]),
         ("win.toggle-sidebar", &["F9"]),

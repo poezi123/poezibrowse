@@ -4,7 +4,7 @@ use std::time::Instant;
 use gtk::prelude::*;
 use gtk::{pango, Align, Orientation};
 
-use crate::config::EngineKind;
+use crate::config::{EngineKind, Mode};
 use crate::engine::Page;
 
 #[derive(Clone)]
@@ -17,6 +17,7 @@ pub struct Snapshot {
 
 pub struct Tab {
     pub id: u64,
+    pub mode: Mode,
     pub container: gtk::Box,
     pub label: gtk::EventBox,
     chip: gtk::Box,
@@ -31,12 +32,17 @@ pub struct Tab {
 }
 
 impl Tab {
-    pub fn new(id: u64) -> Tab {
+    pub fn new(id: u64, mode: Mode) -> Tab {
         let container = gtk::Box::new(Orientation::Vertical, 0);
         container.show();
 
         let row = gtk::Box::new(Orientation::Horizontal, 6);
         row.style_context().add_class("tab-chip");
+        match mode {
+            Mode::Private => row.style_context().add_class("private"),
+            Mode::Tor => row.style_context().add_class("tor"),
+            Mode::Normal => {}
+        }
         let icon = gtk::Image::from_icon_name(Some("text-html-symbolic"), gtk::IconSize::Menu);
         let spinner = gtk::Spinner::new();
         let title = gtk::Label::new(Some("Neuer Tab"));
@@ -67,6 +73,7 @@ impl Tab {
 
         let tab = Tab {
             id,
+            mode,
             container,
             label,
             chip: row,
@@ -163,12 +170,21 @@ impl Tab {
             self.spinner.stop();
             self.spinner.hide();
             self.icon.show();
-            match page.as_ref().and_then(|p| p.favicon()) {
+            let mode_icon = match self.mode {
+                Mode::Private => Some(crate::sidebar::PRIVATE_ICON),
+                Mode::Tor => Some(crate::sidebar::TOR_ICON),
+                Mode::Normal => None,
+            };
+            if let Some(icon) = mode_icon {
+                crate::sidebar::set_image(&self.icon, &icon, self.icon.scale_factor().max(1));
+            } else {
+                match page.as_ref().and_then(|p| p.favicon()) {
                 Some(pixbuf) => self.icon.set_from_pixbuf(Some(&pixbuf)),
                 None => self.icon.set_from_icon_name(
                     Some(if self.is_sleeping() { "weather-clear-night-symbolic" } else { "text-html-symbolic" }),
                     gtk::IconSize::Menu,
                 ),
+                }
             }
         }
         let playing = page.as_ref().is_some_and(|p| p.is_playing_audio());

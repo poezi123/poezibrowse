@@ -46,6 +46,13 @@ impl TitleBar {
         bar
     }
 
+    pub fn set_mode(&self, mode: Mode) {
+        if self.state.borrow().mode != Some(mode) {
+            self.state.borrow_mut().mode = Some(mode);
+            self.header.queue_draw();
+        }
+    }
+
     pub fn apply(&self, config: &Config) {
         let animate = {
             let mut s = self.state.borrow_mut();

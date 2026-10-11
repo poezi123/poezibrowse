@@ -122,8 +122,8 @@ impl App {
         let me = self.me.clone();
         self.tor.connect_changed(move |status| {
             if let Some(app) = me.upgrade() {
-                for window in app.windows.borrow().iter().filter(|w| w.mode == Mode::Tor) {
-                    window.tor_status_changed(status);
+                for window in app.windows.borrow().iter() {
+                    window.tor_status_changed();
                 }
                 if status.ready() {
                     app.reload_pages_starting_with("poezi://tor");
@@ -197,34 +197,44 @@ impl App {
         }
     }
 
-    pub fn new_window(self: &Rc<Self>, mode: Mode, with_home: bool) -> Rc<BrowserWindow> {
-        if mode == Mode::Tor {
-            self.tor.start(&self.config.borrow());
-        }
-        let window = BrowserWindow::new(self, mode);
+    pub fn new_window(self: &Rc<Self>, with_home: bool) -> Rc<BrowserWindow> {
+        let window = BrowserWindow::new(self);
         self.windows.borrow_mut().push(window.clone());
         if with_home {
-            window.open_tab(&self.homepage(mode), false);
-        }
-        if mode == Mode::Tor {
-            window.tor_status_changed(&self.tor.status());
+            window.open_tab(&self.homepage(Mode::Normal), false);
         }
         window.window.present();
         window
     }
 
+    pub fn open_mode_tab(self: &Rc<Self>, mode: Mode) {
+        let window = match self.last_window() {
+            Some(w) => w,
+            None => self.new_window(false),
+        };
+        window.open_mode_tab(mode);
+        window.window.present();
+    }
+
     pub fn window_closing(&self, window: &Rc<BrowserWindow>) {
-        let remaining = self.windows.borrow().iter().filter(|w| !w.private && !Rc::ptr_eq(w, window)).count();
-        if remaining > 0 || window.private {
+        let remaining = self.windows.borrow().iter().filter(|w| !Rc::ptr_eq(w, window)).count();
+        if remaining > 0 {
             self.windows.borrow_mut().retain(|w| !Rc::ptr_eq(w, window));
             self.save_session();
         } else {
             self.save_session();
             self.windows.borrow_mut().retain(|w| !Rc::ptr_eq(w, window));
         }
-        if window.mode != Mode::Normal && !self.windows.borrow().iter().any(|w| w.mode == window.mode) {
-            self.engine_slot(window.mode).borrow_mut().take();
-            if window.mode == Mode::Tor {
+        self.forget_unused_modes();
+    }
+
+    pub fn forget_unused_modes(&self) {
+        for mode in [Mode::Private, Mode::Tor] {
+            if self.windows.borrow().iter().any(|w| w.has_tab_mode(mode)) {
+                continue;
+            }
+            self.engine_slot(mode).borrow_mut().take();
+            if mode == Mode::Tor && self.tor.is_running() {
                 self.tor.stop();
             }
         }
@@ -308,7 +318,6 @@ impl App {
         let windows = self.windows.borrow();
         active
             .and_then(|a| windows.iter().find(|w| w.window.upcast_ref::<gtk::Window>() == &a).cloned())
-            .or_else(|| windows.iter().rev().find(|w| w.mode == Mode::Normal).cloned())
             .or_else(|| windows.last().cloned())
     }
 
@@ -320,12 +329,12 @@ impl App {
         let start = self.start_action.take();
         if self.windows.borrow().is_empty() {
             match start {
-                Some("new-private-window") => {
-                    self.new_window(Mode::Private, true);
+                Some("new-private-tab") => {
+                    self.open_mode_tab(Mode::Private);
                     return;
                 }
-                Some("new-tor-window") => {
-                    self.new_window(Mode::Tor, true);
+                Some("new-tor-tab") => {
+                    self.open_mode_tab(Mode::Tor);
                     return;
                 }
                 _ => {}
@@ -336,7 +345,7 @@ impl App {
             return;
         }
         if !self.restore_session() {
-            self.new_window(Mode::Normal, true);
+            self.new_window(true);
         }
     }
 
@@ -347,7 +356,7 @@ impl App {
                 let restored = self.restore_session();
                 match self.last_window() {
                     Some(w) if restored => w,
-                    _ => self.new_window(Mode::Normal, false),
+                    _ => self.new_window(false),
                 }
             }
         };
@@ -367,10 +376,10 @@ impl App {
         }
         let windows = self.windows.borrow();
         let mut session = Session::default();
-        for window in windows.iter().filter(|w| !w.private) {
+        for window in windows.iter() {
             let current = window.current_tab().map(|t| t.id);
             let mut state = WindowState::default();
-            for (i, tab) in window.tabs().iter().enumerate() {
+            for (i, tab) in window.tabs().iter().filter(|t| t.mode == Mode::Normal).enumerate() {
                 let snapshot = match tab.page.borrow().as_ref() {
                     Some(page) => Snapshot {
                         uri: page.uri().unwrap_or_default(),
@@ -411,7 +420,7 @@ impl App {
             return false;
         }
         for state in session.windows {
-            let window = self.new_window(Mode::Normal, false);
+            let window = self.new_window(false);
             let active = state.active;
             let mut tabs = Vec::new();
             for tab in state.tabs {
@@ -706,6 +715,9 @@ fn load_css() {
         .side-panel progressbar trough { min-height: 4px; border-radius: 999px; }
         .side-panel progressbar progress { min-height: 4px; border-radius: 999px; background-color: #13b5b1; }
         .tor-badge { background-color: alpha(#7d4698, 0.75); }
+        .tab-chip.private.active { box-shadow: inset 0 2px #c04fd0; background-color: #1d1526; }
+        .tab-chip.tor.active { box-shadow: inset 0 2px #8f5bb0; background-color: #191a24; }
+        .tab-chip.private, .tab-chip.tor { color: #c9b8d6; }
 
         .sleeping { opacity: 0.5; }
         .sleeping label { font-style: italic; }

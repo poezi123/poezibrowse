@@ -21,6 +21,19 @@ fn svg_pixbuf(svg: &str, size: i32) -> Option<Pixbuf> {
     loader.pixbuf()
 }
 
+pub fn set_image(image: &gtk::Image, icon: &Icon, scale: i32) {
+    match icon {
+        Icon::Theme(name) => image.set_from_icon_name(Some(name), gtk::IconSize::Menu),
+        Icon::Svg(svg) => {
+            if let Some(pixbuf) = svg_pixbuf(svg, 16 * scale) {
+                if let Some(surface) = gtk::gdk::prelude::GdkPixbufExt::create_surface(&pixbuf, scale, None::<&gtk::gdk::Window>) {
+                    image.set_from_surface(Some(&surface));
+                }
+            }
+        }
+    }
+}
+
 pub fn image(icon: &Icon, scale: i32) -> gtk::Image {
     match icon {
         Icon::Theme(name) => gtk::Image::from_icon_name(Some(name), gtk::IconSize::Button),

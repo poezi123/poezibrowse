@@ -19,8 +19,6 @@ const TAB_TARGET: &str = "application/x-poezibrowse-tab";
 pub struct BrowserWindow {
     app: Rc<App>,
     pub window: gtk::ApplicationWindow,
-    pub mode: Mode,
-    pub private: bool,
     pub titlebar: TitleBar,
     back: gtk::Button,
     forward: gtk::Button,
@@ -45,7 +43,7 @@ pub struct BrowserWindow {
     panel_toggles: Vec<(String, gtk::ToggleButton)>,
     bookmarks_panel: sidebar::Panel,
     history_panel: sidebar::Panel,
-    tor_badge: Option<gtk::Label>,
+    mode_badge: gtk::Label,
     tabs: RefCell<Vec<Rc<Tab>>>,
     closed: RefCell<Vec<Snapshot>>,
     fullscreen: Cell<bool>,
@@ -54,8 +52,7 @@ pub struct BrowserWindow {
 }
 
 impl BrowserWindow {
-    pub fn new(app: &Rc<App>, mode: Mode) -> Rc<BrowserWindow> {
-        let private = mode.is_private();
+    pub fn new(app: &Rc<App>) -> Rc<BrowserWindow> {
         let window = gtk::ApplicationWindow::new(&app.gtk_app);
         window.set_default_size(1280, 820);
         window.set_icon_name(Some(config::APP_ID));
@@ -73,34 +70,17 @@ impl BrowserWindow {
         let reload = icon_button("view-refresh-symbolic", "Neu laden (Strg+R)");
         header.pack_start(&nav);
         header.pack_start(&reload);
-        let tor_badge = match mode {
-            Mode::Private => {
-                let badge = gtk::Label::new(Some("Privat"));
-                badge.style_context().add_class("private-badge");
-                badge.set_valign(Align::Center);
-                header.pack_start(&badge);
-                None
-            }
-            Mode::Tor => {
-                let badge = gtk::Label::new(Some("Tor"));
-                badge.style_context().add_class("private-badge");
-                badge.style_context().add_class("tor-badge");
-                badge.set_valign(Align::Center);
-                header.pack_start(&badge);
-                Some(badge)
-            }
-            Mode::Normal => None,
-        };
+        let mode_badge = gtk::Label::new(None);
+        mode_badge.style_context().add_class("private-badge");
+        mode_badge.set_valign(Align::Center);
+        mode_badge.set_no_show_all(true);
+        header.pack_start(&mode_badge);
 
         let entry = gtk::Entry::new();
         entry.set_hexpand(true);
         entry.set_width_chars(40);
         entry.set_max_width_chars(110);
-        entry.set_placeholder_text(Some(match mode {
-            Mode::Normal => "Suchen oder Adresse eingeben",
-            Mode::Private => "Privat suchen oder Adresse eingeben",
-            Mode::Tor => "Über Tor suchen oder Adresse eingeben",
-        }));
+        entry.set_placeholder_text(Some("Suchen oder Adresse eingeben"));
         entry.set_input_purpose(gtk::InputPurpose::Url);
         header.set_custom_title(Some(&entry));
 
@@ -118,7 +98,7 @@ impl BrowserWindow {
 
         let menu_button = gtk::MenuButton::new();
         menu_button.set_image(Some(&gtk::Image::from_icon_name(Some("open-menu-symbolic"), gtk::IconSize::Button)));
-        menu_button.set_menu_model(Some(&main_menu(private)));
+        menu_button.set_menu_model(Some(&main_menu()));
         menu_button.set_tooltip_text(Some("Menü"));
         header.pack_end(&menu_button);
         let downloads_button = icon_button("folder-download-symbolic", "Downloads (Strg+Umschalt+Y)");
@@ -128,7 +108,7 @@ impl BrowserWindow {
         header.pack_end(&password_button);
 
         window.set_titlebar(Some(&header));
-        let titlebar = TitleBar::install(&header, &app.config.borrow(), mode);
+        let titlebar = TitleBar::install(&header, &app.config.borrow(), Mode::Normal);
         window.style_context().add_class("poezi");
 
         let favorites = gtk::Box::new(Orientation::Horizontal, 2);
@@ -216,8 +196,8 @@ impl BrowserWindow {
         }
         sidebar.pack_start(&gtk::Separator::new(Orientation::Horizontal), false, false, 4);
         for (action, icon, tip) in [
-            ("win.new-private-window", sidebar::PRIVATE_ICON, "Neues privates Fenster (Strg+Umschalt+P)"),
-            ("win.new-tor-window", sidebar::TOR_ICON, "Neues Tor-Fenster (Strg+Umschalt+U)"),
+            ("win.new-private-tab", sidebar::PRIVATE_ICON, "Neuer privater Tab (Strg+Umschalt+P)"),
+            ("win.new-tor-tab", sidebar::TOR_ICON, "Neuer Tor-Tab (Strg+Umschalt+U)"),
             ("win.sleep-tab", Icon::Theme("weather-clear-night-symbolic"), "Hintergrund-Tabs schlafen legen (RAM freigeben)"),
         ] {
             let b = sidebar::button(&icon, tip, scale);
@@ -272,8 +252,6 @@ impl BrowserWindow {
         let this = Rc::new(BrowserWindow {
             app: app.clone(),
             window,
-            mode,
-            private,
             titlebar,
             back,
             forward,
@@ -298,7 +276,7 @@ impl BrowserWindow {
             panel_toggles,
             bookmarks_panel,
             history_panel,
-            tor_badge,
+            mode_badge,
             tabs: RefCell::new(Vec::new()),
             closed: RefCell::new(Vec::new()),
             fullscreen: Cell::new(false),
@@ -510,8 +488,14 @@ impl BrowserWindow {
     fn add_actions(self: &Rc<Self>) {
         let actions: &[(&str, fn(&Rc<BrowserWindow>))] = &[
             ("new-tab", |w| {
-                w.open_tab(&w.app.homepage(w.mode), false);
+                w.open_tab(&w.app.homepage(Mode::Normal), false);
                 w.focus_location();
+            }),
+            ("new-private-tab", |w| {
+                w.open_mode_tab(Mode::Private);
+            }),
+            ("new-tor-tab", |w| {
+                w.open_mode_tab(Mode::Tor);
             }),
             ("close-tab", |w| {
                 if let Some(tab) = w.current_tab() {
@@ -520,13 +504,7 @@ impl BrowserWindow {
             }),
             ("reopen-tab", |w| w.reopen_closed_tab()),
             ("new-window", |w| {
-                w.app.new_window(Mode::Normal, true);
-            }),
-            ("new-private-window", |w| {
-                w.app.new_window(Mode::Private, true);
-            }),
-            ("new-tor-window", |w| {
-                w.app.new_window(Mode::Tor, true);
+                w.app.new_window(true);
             }),
             ("focus-location", |w| w.focus_location()),
             ("reload", |w| w.with_page(|p| p.reload(false))),
@@ -605,8 +583,8 @@ impl BrowserWindow {
         self.window.add_action(&select);
     }
 
-    fn new_tab_shell(self: &Rc<Self>, background: bool) -> Rc<Tab> {
-        let tab = Rc::new(Tab::new(self.app.next_tab_id()));
+    fn new_tab_shell(self: &Rc<Self>, background: bool, mode: Mode) -> Rc<Tab> {
+        let tab = Rc::new(Tab::new(self.app.next_tab_id(), mode));
         let position = self.notebook.current_page().map(|p| p + 1);
         let index = self.notebook.insert_page(&tab.container, None::<&gtk::Widget>, position);
         self.tabs_box.pack_start(&tab.label, false, false, 0);
@@ -721,13 +699,34 @@ impl BrowserWindow {
     }
 
     pub fn open_tab(self: &Rc<Self>, uri: &str, background: bool) -> Rc<Tab> {
-        let engine = self.app.config.borrow().engine;
-        self.open_tab_with(uri, background, engine)
+        self.open_tab_in(uri, background, Mode::Normal)
     }
 
-    pub fn open_tab_with(self: &Rc<Self>, uri: &str, background: bool, engine: EngineKind) -> Rc<Tab> {
-        let tab = self.new_tab_shell(background);
-        let page = self.app.create_page(engine, self.mode);
+    pub fn open_tab_in(self: &Rc<Self>, uri: &str, background: bool, mode: Mode) -> Rc<Tab> {
+        let engine = self.app.config.borrow().engine;
+        self.open_tab_with(uri, background, engine, mode)
+    }
+
+    pub fn open_mode_tab(self: &Rc<Self>, mode: Mode) -> Rc<Tab> {
+        if mode == Mode::Tor {
+            self.app.tor.start(&self.app.config.borrow());
+        }
+        let tab = self.open_tab_in(&self.app.homepage(mode), false, mode);
+        self.focus_location();
+        tab
+    }
+
+    pub fn has_tab_mode(&self, mode: Mode) -> bool {
+        self.tabs.borrow().iter().any(|t| t.mode == mode)
+    }
+
+    pub fn current_mode(&self) -> Mode {
+        self.current_tab().map(|t| t.mode).unwrap_or(Mode::Normal)
+    }
+
+    pub fn open_tab_with(self: &Rc<Self>, uri: &str, background: bool, engine: EngineKind, mode: Mode) -> Rc<Tab> {
+        let tab = self.new_tab_shell(background, mode);
+        let page = self.app.create_page(engine, mode);
         self.connect_page(&tab, page.as_ref());
         page.load_uri(uri);
         tab.attach(page);
@@ -737,7 +736,7 @@ impl BrowserWindow {
     }
 
     pub fn add_sleeping_tab(self: &Rc<Self>, snapshot: Snapshot) -> Rc<Tab> {
-        let tab = self.new_tab_shell(true);
+        let tab = self.new_tab_shell(true, Mode::Normal);
         *tab.snapshot.borrow_mut() = Some(snapshot);
         tab.label.style_context().add_class("sleeping");
         tab.refresh_label();
@@ -764,7 +763,7 @@ impl BrowserWindow {
 
     pub fn close_tab(self: &Rc<Self>, tab: &Rc<Tab>) {
         let uri = tab.uri();
-        if !self.private && !uri.is_empty() {
+        if tab.mode == Mode::Normal && !uri.is_empty() {
             let snapshot = match tab.page.borrow().as_ref() {
                 Some(p) => Snapshot { uri, title: tab.title(), engine: p.engine(), state: p.save_state() },
                 None => tab.snapshot.borrow().clone().unwrap_or(Snapshot { uri, title: String::new(), engine: EngineKind::Webkit, state: None }),
@@ -776,7 +775,7 @@ impl BrowserWindow {
             }
         }
         if self.tabs.borrow().len() == 1 {
-            self.open_tab(&self.app.homepage(self.mode), false);
+            self.open_tab(&self.app.homepage(Mode::Normal), false);
         }
         if let Some(page) = tab.page.borrow_mut().take() {
             page.close();
@@ -787,6 +786,9 @@ impl BrowserWindow {
             self.notebook.remove_page(Some(n));
         }
         self.app.session_changed();
+        if tab.mode != Mode::Normal {
+            self.app.forget_unused_modes();
+        }
     }
 
     fn reopen_closed_tab(self: &Rc<Self>) {
@@ -803,7 +805,7 @@ impl BrowserWindow {
             tab.container.remove(&child);
         }
         let engine = if snapshot.engine.available() { snapshot.engine } else { EngineKind::Webkit };
-        let page = self.app.create_page(engine, self.mode);
+        let page = self.app.create_page(engine, tab.mode);
         self.connect_page(tab, page.as_ref());
         let restored = snapshot.state.as_deref().is_some_and(|state| page.restore_state(state));
         if !restored {
@@ -890,15 +892,16 @@ impl BrowserWindow {
             EngineKind::Webkit => EngineKind::Servo,
             EngineKind::Servo => EngineKind::Webkit,
         };
-        if !other.available() || self.mode == Mode::Tor {
+        let tor = tab.mode == Mode::Tor;
+        if !other.available() || tor {
             let dialog = gtk::MessageDialog::new(
                 Some(&self.window),
                 gtk::DialogFlags::MODAL,
                 gtk::MessageType::Info,
                 gtk::ButtonsType::Ok,
-                if self.mode == Mode::Tor { "Im Tor-Modus läuft nur WebKit." } else { "Diese Version wurde ohne Servo gebaut." },
+                if tor { "Im Tor-Modus läuft nur WebKit." } else { "Diese Version wurde ohne Servo gebaut." },
             );
-            if self.mode != Mode::Tor {
+            if !tor {
                 dialog.set_secondary_text(Some("Baue PoeziBrowse mit „cargo build --release --features servo“, um die Servo-Engine zu nutzen."));
             }
             dialog.connect_response(|d, _| d.close());
@@ -906,7 +909,7 @@ impl BrowserWindow {
             return;
         }
         let uri = tab.uri();
-        let new_tab = self.open_tab_with(&uri, false, other);
+        let new_tab = self.open_tab_with(&uri, false, other, tab.mode);
         self.close_tab(&tab);
         new_tab.refresh_label();
     }
@@ -940,7 +943,7 @@ impl BrowserWindow {
                 if is_current {
                     self.entry.set_progress_fraction(0.0);
                 }
-                if !self.private {
+                if tab.mode == Mode::Normal {
                     if let Some(page) = tab.page.borrow().as_ref() {
                         self.app.page_visited(&page.uri().unwrap_or_default(), &page.title().unwrap_or_default());
                     }
@@ -956,10 +959,10 @@ impl BrowserWindow {
             },
             PageEvent::OpenInNewTab(uri, background) => {
                 let engine = tab.engine().unwrap_or_default();
-                self.open_tab_with(&uri, background, engine);
+                self.open_tab_with(&uri, background, engine, tab.mode);
             }
             PageEvent::Popup(page) => {
-                let new_tab = self.new_tab_shell(false);
+                let new_tab = self.new_tab_shell(false, tab.mode);
                 self.connect_page(&new_tab, page.as_ref());
                 new_tab.attach(page);
                 new_tab.set_active(true);
@@ -1031,6 +1034,7 @@ impl BrowserWindow {
         }
         let uri = tab.as_ref().map(|t| t.uri()).unwrap_or_default();
         self.update_entry_icons(&uri);
+        self.update_mode_look(tab.as_ref().map(|t| t.mode).unwrap_or(Mode::Normal));
         if !self.entry.has_focus() {
             let shown = if uri.starts_with("poezi://start") || uri.starts_with("poezi://tor") { "" } else { uri.as_str() };
             self.entry.set_text(shown);
@@ -1115,7 +1119,7 @@ impl BrowserWindow {
 
     fn update_title(&self) {
         let title = self.current_tab().map(|t| t.title()).unwrap_or_default();
-        let suffix = match self.mode {
+        let suffix = match self.current_mode() {
             Mode::Normal => "PoeziBrowse",
             Mode::Private => "PoeziBrowse (privat)",
             Mode::Tor => "PoeziBrowse (Tor)",
@@ -1335,9 +1339,8 @@ impl BrowserWindow {
             ("In neuem Tab öffnen", Box::new(|w, url| {
                 w.open_tab(url, false);
             })),
-            ("In privatem Fenster öffnen", Box::new(|w, url| {
-                let window = w.app.new_window(Mode::Private, false);
-                window.open_tab(url, false);
+            ("In privatem Tab öffnen", Box::new(|w, url| {
+                w.open_tab_in(url, false, Mode::Private);
             })),
             ("Aus Favoriten entfernen", Box::new(|w, url| {
                 w.app.storage.remove_bookmark(url);
@@ -1367,11 +1370,33 @@ impl BrowserWindow {
         }
     }
 
-    pub fn tor_status_changed(&self, status: &crate::tor::Status) {
-        if let Some(badge) = &self.tor_badge {
-            badge.set_text(&format!("Tor · {}", status.label()));
-            badge.set_tooltip_text(Some(&status.summary));
+    pub fn tor_status_changed(&self) {
+        self.update_mode_look(self.current_mode());
+    }
+
+    fn update_mode_look(&self, mode: Mode) {
+        self.titlebar.set_mode(mode);
+        match mode {
+            Mode::Normal => self.mode_badge.hide(),
+            Mode::Private => {
+                self.mode_badge.set_text("Privat");
+                self.mode_badge.style_context().remove_class("tor-badge");
+                self.mode_badge.set_tooltip_text(Some("Privater Tab: kein Verlauf, Cookies werden beim Schließen des letzten privaten Tabs gelöscht"));
+                self.mode_badge.show();
+            }
+            Mode::Tor => {
+                let status = self.app.tor.status();
+                self.mode_badge.set_text(&format!("Tor · {}", status.label()));
+                self.mode_badge.style_context().add_class("tor-badge");
+                self.mode_badge.set_tooltip_text(Some(&status.summary));
+                self.mode_badge.show();
+            }
         }
+        self.entry.set_placeholder_text(Some(match mode {
+            Mode::Normal => "Suchen oder Adresse eingeben",
+            Mode::Private => "Privat suchen oder Adresse eingeben",
+            Mode::Tor => "Über Tor suchen oder Adresse eingeben",
+        }));
     }
 }
 
@@ -1388,13 +1413,13 @@ fn icon_button(icon: &str, tooltip: &str) -> gtk::Button {
     b
 }
 
-fn main_menu(private: bool) -> gio::Menu {
+fn main_menu() -> gio::Menu {
     let menu = gio::Menu::new();
     let windows = gio::Menu::new();
     windows.append(Some("Neuer Tab"), Some("win.new-tab"));
     windows.append(Some("Neues Fenster"), Some("win.new-window"));
-    windows.append(Some("Neues privates Fenster"), Some("win.new-private-window"));
-    windows.append(Some("Neues Tor-Fenster"), Some("win.new-tor-window"));
+    windows.append(Some("Neuer privater Tab"), Some("win.new-private-tab"));
+    windows.append(Some("Neuer Tor-Tab"), Some("win.new-tor-tab"));
     menu.append_section(None, &windows);
 
     let page = gio::Menu::new();
@@ -1419,9 +1444,7 @@ fn main_menu(private: bool) -> gio::Menu {
     misc.append(Some("Lesezeichen"), Some("win.bookmarks"));
     misc.append(Some("Verlauf"), Some("win.history"));
     misc.append(Some("Downloads"), Some("win.downloads"));
-    if !private {
-        misc.append(Some("Einstellungen"), Some("win.settings"));
-    }
+    misc.append(Some("Einstellungen"), Some("win.settings"));
     misc.append(Some("Entwicklerwerkzeuge"), Some("win.inspector"));
     misc.append(Some("Über PoeziBrowse"), Some("win.about"));
     menu.append_section(None, &misc);
