@@ -215,8 +215,6 @@ impl App {
 
     pub fn create_page(&self, engine: EngineKind, mode: Mode) -> Box<dyn Page> {
         match engine {
-            #[cfg(feature = "servo")]
-            EngineKind::Servo if mode != Mode::Tor => crate::engine::servo::create_page(&self.config.borrow(), mode.is_private()),
             _ => Box::new(PageHandle(self.webkit_engine(mode).create_page(None))),
         }
     }

@@ -25,7 +25,7 @@ impl EngineKind {
     pub fn available(self) -> bool {
         match self {
             EngineKind::Webkit => true,
-            EngineKind::Servo => cfg!(feature = "servo"),
+            EngineKind::Servo => false,
         }
     }
 }

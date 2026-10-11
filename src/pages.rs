@@ -496,7 +496,7 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
                 "<select name=\"engine\"><option value=\"webkit\"{}>WebKit</option><option value=\"servo\"{}{servo_disabled}>Servo{}</option></select>",
                 if c.engine == EngineKind::Webkit { " selected" } else { "" },
                 if c.engine == EngineKind::Servo { " selected" } else { "" },
-                if servo_disabled.is_empty() { "" } else { " (nicht eingebaut)" }
+                if servo_disabled.is_empty() { "" } else { " (kommt später)" }
             ),
         ),
         row("Tabs schlafen legen nach", "Minuten ohne Benutzung, 0 = nie", format!("<input type=\"number\" min=\"0\" name=\"tab_sleep_minutes\" value=\"{}\">", c.tab_sleep_minutes)),

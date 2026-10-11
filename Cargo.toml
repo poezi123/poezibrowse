@@ -1,6 +1,6 @@
 [package]
 name = "poezibrowse"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "A lean, private web browser for Linux written in Rust"
 license = "GPL-3.0-or-later"
@@ -25,8 +25,6 @@ sha2 = "0.11.0"
 getrandom = "0.3"
 javascriptcore-rs = "1.1"
 
-[features]
-servo = []
 
 [profile.release]
 opt-level = 3

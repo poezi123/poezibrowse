@@ -923,10 +923,10 @@ impl BrowserWindow {
                 gtk::DialogFlags::MODAL,
                 gtk::MessageType::Info,
                 gtk::ButtonsType::Ok,
-                if tor { "Im Tor-Modus läuft nur WebKit." } else { "Diese Version wurde ohne Servo gebaut." },
+                if tor { "Im Tor-Modus läuft nur WebKit." } else { "Servo ist noch nicht verfügbar." },
             );
             if !tor {
-                dialog.set_secondary_text(Some("Baue PoeziBrowse mit „cargo build --release --features servo“, um die Servo-Engine zu nutzen."));
+                dialog.set_secondary_text(Some("Die Servo-Engine kommt in einer späteren Version."));
             }
             dialog.connect_response(|d, _| d.close());
             dialog.show_all();
