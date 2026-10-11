@@ -1,0 +1,58 @@
+
+pkgname=poezibrowse
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Schlanker Webbrowser für Linux, geschrieben in Rust'
+arch=('x86_64')
+url='https://github.com/poezi123/poezibrowse'
+license=('GPL-3.0-or-later')
+depends=('webkit2gtk-4.1' 'gtk3' 'glib2' 'cairo' 'pango' 'gdk-pixbuf2' 'sqlite' 'hicolor-icon-theme')
+makedepends=('cargo' 'pkgconf')
+optdepends=('xdg-dbus-proxy: Sandbox für Webseiten-Prozesse')
+options=('!lto' '!debug')
+
+_appid='io.github.poezi123.PoeziBrowse'
+
+_projectdir() {
+  realpath "${startdir}/../.."
+}
+
+prepare() {
+  rm -rf "${srcdir}/${pkgname}"
+  mkdir -p "${srcdir}/${pkgname}"
+  tar -C "$(_projectdir)" \
+    --exclude='./target' \
+    --exclude='./.git' \
+    --exclude='./packaging/arch/src' \
+    --exclude='./packaging/arch/pkg' \
+    --exclude='./packaging/arch/*.pkg.tar.*' \
+    -cf - . | tar -C "${srcdir}/${pkgname}" -xf -
+  cd "${srcdir}/${pkgname}"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "${srcdir}/${pkgname}"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+}
+
+check() {
+  cd "${srcdir}/${pkgname}"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo test --frozen --release
+}
+
+package() {
+  cd "${srcdir}/${pkgname}"
+  install -Dm755 target/release/poezibrowse -t "${pkgdir}/usr/bin"
+  install -Dm644 "packaging/linux/${_appid}.desktop" -t "${pkgdir}/usr/share/applications"
+  for size in 16 24 32 48 64 128 256 512; do
+    install -Dm644 "packaging/linux/icons/${size}.png" \
+      "${pkgdir}/usr/share/icons/hicolor/${size}x${size}/apps/${_appid}.png"
+  done
+  install -Dm644 packaging/linux/icon.svg "${pkgdir}/usr/share/icons/hicolor/scalable/apps/${_appid}.svg"
+  install -Dm644 LICENSE -t "${pkgdir}/usr/share/licenses/${pkgname}"
+}

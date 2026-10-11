@@ -27,7 +27,36 @@ fn main() -> gtk::glib::ExitCode {
     let a = app.clone();
     gtk_app.connect_startup(move |gtk_app| {
         set_accels(gtk_app);
+        for (name, private) in [("new-window", false), ("new-private-window", true)] {
+            let action = gio::SimpleAction::new(name, None);
+            let a = a.clone();
+            action.connect_activate(move |_, _| {
+                a.new_window(private, true);
+            });
+            gtk_app.add_action(&action);
+        }
         a.start();
+    });
+    gtk_app.add_main_option("new-window", gtk::glib::Char::from(b'n'), gtk::glib::OptionFlags::NONE, gtk::glib::OptionArg::None, "Neues Fenster öffnen", None);
+    gtk_app.add_main_option("private-window", gtk::glib::Char::from(b'p'), gtk::glib::OptionFlags::NONE, gtk::glib::OptionArg::None, "Neues privates Fenster öffnen", None);
+    let a = app.clone();
+    gtk_app.connect_handle_local_options(move |gtk_app, options| {
+        let action = if options.contains("private-window") {
+            "new-private-window"
+        } else if options.contains("new-window") {
+            "new-window"
+        } else {
+            return -1;
+        };
+        if gtk_app.register(None::<&gio::Cancellable>).is_err() {
+            return 1;
+        }
+        if gtk_app.is_remote() {
+            gtk_app.activate_action(action, None);
+            return 0;
+        }
+        a.set_start_action(action);
+        -1
     });
     let a = app.clone();
     gtk_app.connect_activate(move |_| a.activate());

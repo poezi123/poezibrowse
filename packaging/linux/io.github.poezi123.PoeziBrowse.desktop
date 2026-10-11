@@ -1,0 +1,26 @@
+[Desktop Entry]
+Type=Application
+Name=PoeziBrowse
+GenericName=Webbrowser
+GenericName[en]=Web Browser
+Comment=Schlanker Webbrowser mit Werbeblocker und wenig RAM-Verbrauch
+Comment[en]=Lean web browser with ad blocker and low memory usage
+Exec=poezibrowse %U
+Icon=io.github.poezi123.PoeziBrowse
+Terminal=false
+Categories=Network;WebBrowser;
+Keywords=Browser;Web;Internet;WWW;Werbeblocker;
+MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+StartupNotify=true
+StartupWMClass=poezibrowse
+Actions=new-window;new-private-window;
+
+[Desktop Action new-window]
+Name=Neues Fenster
+Name[en]=New Window
+Exec=poezibrowse --new-window
+
+[Desktop Action new-private-window]
+Name=Neues privates Fenster
+Name[en]=New Private Window
+Exec=poezibrowse --private-window

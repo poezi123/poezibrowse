@@ -30,6 +30,7 @@ pub struct App {
     session_dirty: Cell<bool>,
     quitting: Cell<bool>,
     system_dark: std::cell::OnceCell<bool>,
+    start_action: Cell<Option<&'static str>>,
     me: Weak<App>,
 }
 
@@ -48,6 +49,7 @@ impl App {
             session_dirty: Cell::new(false),
             quitting: Cell::new(false),
             system_dark: std::cell::OnceCell::new(),
+            start_action: Cell::new(None),
             me: me.clone(),
         })
     }
@@ -162,7 +164,15 @@ impl App {
             .or_else(|| windows.last().cloned())
     }
 
+    pub fn set_start_action(&self, action: &'static str) {
+        self.start_action.set(Some(action));
+    }
+
     pub fn activate(self: &Rc<Self>) {
+        if self.start_action.take() == Some("new-private-window") && self.windows.borrow().is_empty() {
+            self.new_window(true, true);
+            return;
+        }
         if let Some(window) = self.last_window() {
             window.window.present();
             return;

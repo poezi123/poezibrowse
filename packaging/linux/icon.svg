@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="40%" r="75%">
+      <stop offset="0" stop-color="#101a3d"/>
+      <stop offset="1" stop-color="#04060f"/>
+    </radialGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1fd1c8"/>
+      <stop offset="1" stop-color="#8a4dff"/>
+    </linearGradient>
+    <linearGradient id="glyph" x1="0.1" y1="0.1" x2="0.9" y2="0.9">
+      <stop offset="0" stop-color="#22e0d6"/>
+      <stop offset="0.55" stop-color="#3f8cff"/>
+      <stop offset="1" stop-color="#9b4dff"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="9" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="clip"><rect x="24" y="24" width="464" height="464" rx="104"/></clipPath>
+  </defs>
+  <rect x="24" y="24" width="464" height="464" rx="104" fill="url(#bg)"/>
+  <g clip-path="url(#clip)" fill="none" stroke="#2fb8e8" stroke-opacity="0.13" stroke-width="3">
+    <path d="M-10 120 C 90 80, 160 170, 260 130 S 430 60, 530 110"/>
+    <path d="M-10 160 C 100 120, 170 210, 270 170 S 440 100, 530 150"/>
+    <path d="M-10 380 C 80 340, 180 420, 280 380 S 420 320, 530 360"/>
+    <path d="M-10 420 C 90 380, 190 460, 290 420 S 430 360, 530 400"/>
+    <path d="M-10 460 C 100 420, 200 500, 300 460 S 440 400, 530 440"/>
+  </g>
+  <rect x="26" y="26" width="460" height="460" rx="102" fill="none" stroke="url(#edge)" stroke-width="6" stroke-opacity="0.9"/>
+  <g filter="url(#glow)" fill="none" stroke="url(#glyph)" stroke-width="22" stroke-linecap="round">
+    <circle cx="256" cy="256" r="128"/>
+    <ellipse cx="256" cy="256" rx="56" ry="128"/>
+    <path d="M136 210 H376"/>
+    <path d="M136 302 H376"/>
+  </g>
+  <path d="M120 330 C 170 420, 360 410, 410 250" fill="none" stroke="#ffffff" stroke-width="18" stroke-linecap="round"/>
+  <path d="M410 250 l -34 26 m 34 -26 l 8 40" fill="none" stroke="#ffffff" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
