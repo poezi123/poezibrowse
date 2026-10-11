@@ -73,6 +73,10 @@ pub trait Page {
     fn print(&self, _parent: &gtk::Window) {}
     fn show_inspector(&self) {}
 
+    fn webview(&self) -> Option<webkit2gtk::WebView> {
+        None
+    }
+
     fn save_state(&self) -> Option<Vec<u8>> {
         None
     }

@@ -16,7 +16,8 @@ use crate::session::{self, Session, TabState, WindowState};
 use crate::tab::Snapshot;
 use crate::window::BrowserWindow;
 use crate::storage::Storage;
-use crate::{memory, pages, passwords};
+use crate::passwords::PasswordManager;
+use crate::{memory, pages};
 
 pub struct App {
     pub gtk_app: gtk::Application,
@@ -25,6 +26,7 @@ pub struct App {
     webkit_private: RefCell<Option<Rc<WebKitEngine>>>,
     webkit_tor: RefCell<Option<Rc<WebKitEngine>>>,
     pub tor: Rc<Tor>,
+    pub passwords: Rc<PasswordManager>,
     inactive_since: Cell<Option<std::time::Instant>>,
     memory_released: Cell<bool>,
     blocker: RefCell<Option<Rc<Blocker>>>,
@@ -48,6 +50,7 @@ impl App {
             webkit_private: RefCell::new(None),
             webkit_tor: RefCell::new(None),
             tor: Tor::new(),
+            passwords: PasswordManager::new(me.clone()),
             inactive_since: Cell::new(None),
             memory_released: Cell::new(false),
             blocker: RefCell::new(None),
@@ -78,8 +81,36 @@ impl App {
         }
     }
 
+    pub fn last_window_pub(&self) -> Option<Rc<BrowserWindow>> {
+        self.last_window()
+    }
+
     pub fn rc(&self) -> Option<Rc<App>> {
         self.me.upgrade()
+    }
+
+    pub fn password_state_changed(&self) {
+        for window in self.windows.borrow().iter() {
+            window.update_password_button();
+        }
+    }
+
+    pub fn window_for_view(&self, view: &webkit2gtk::WebView) -> Option<Rc<BrowserWindow>> {
+        self.windows.borrow().iter().find(|w| w.has_view(view)).cloned()
+    }
+
+    pub fn first_run_checks(self: &Rc<Self>) {
+        if !self.passwords.needs_setup() {
+            return;
+        }
+        let me = self.me.clone();
+        glib::timeout_add_local_once(Duration::from_millis(600), move || {
+            if let Some(app) = me.upgrade() {
+                if let Some(window) = app.last_window() {
+                    app.passwords.setup_dialog(window.window.upcast_ref());
+                }
+            }
+        });
     }
 
     pub fn layout_changed(&self) {
@@ -163,8 +194,8 @@ impl App {
             None => ("text/plain".into(), Vec::new()),
         });
         let engine = WebKitEngine::new(&self.config.borrow(), mode, self.tor.port, handler);
-        let private = mode.is_private();
-        engine.set_content_manager_hook(Rc::new(move |ucm| passwords::setup_page(ucm, private)));
+        let pm = self.passwords.clone();
+        engine.set_content_manager_hook(Rc::new(move |ucm, view| pm.setup_page(ucm, view, mode)));
         let me = self.me.clone();
         engine.context().connect_download_started(move |_, download| {
             if let Some(app) = me.upgrade() {
@@ -326,6 +357,11 @@ impl App {
     }
 
     pub fn activate(self: &Rc<Self>) {
+        self.activate_windows();
+        self.first_run_checks();
+    }
+
+    fn activate_windows(self: &Rc<Self>) {
         let start = self.start_action.take();
         if self.windows.borrow().is_empty() {
             match start {
@@ -364,6 +400,7 @@ impl App {
             window.open_tab(uri, false);
         }
         window.window.present();
+        self.first_run_checks();
     }
 
     pub fn session_changed(&self) {
@@ -715,6 +752,16 @@ fn load_css() {
         .side-panel progressbar trough { min-height: 4px; border-radius: 999px; }
         .side-panel progressbar progress { min-height: 4px; border-radius: 999px; background-color: #13b5b1; }
         .tor-badge { background-color: alpha(#7d4698, 0.75); }
+        headerbar.poezi button.has-login { background-color: alpha(#13b5b1, 0.35); color: #ffffff; box-shadow: inset 0 0 0 1px alpha(#13b5b1, 0.8); }
+        infobar.poezi-prompt > revealer > box { background-color: #123a3a; color: #e8ecf2; border-bottom: 1px solid #13b5b1; padding: 6px 12px; }
+        infobar.poezi-prompt button { border-radius: 999px; }
+        infobar.poezi-prompt label { color: #f1f4f8; font-weight: 600; }
+        infobar.poezi-prompt button.text-button { color: #f1f4f8; background-image: none; background-color: alpha(#ffffff, 0.12); border: none; }
+        infobar.poezi-prompt button.prompt-yes { background-color: #13b5b1; color: #04110f; }
+        popover.passwords { background-color: #121722; color: #e3e7ee; }
+        popover.passwords button.login-entry { background-image: none; background-color: #1a2030; color: #e3e7ee; border: 1px solid #262d3d; border-radius: 10px; padding: 6px 10px; }
+        popover.passwords button.login-entry:hover { border-color: #13b5b1; }
+        popover.passwords label.dim-label { color: #8f98a8; }
         .circuit-flag { font-size: 1.5em; }
         popover.circuit .panel-title { font-weight: 700; }
         popover.circuit { background-color: #121722; color: #e3e7ee; border: 1px solid #262d3d; }

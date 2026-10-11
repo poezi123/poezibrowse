@@ -69,6 +69,9 @@ pub struct Config {
     pub tor_javascript: bool,
     pub tor_use_bridges: bool,
     pub tor_bridges: Vec<String>,
+    pub password_manager: String,
+    pub pm_database: String,
+    pub pm_keyfile: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +133,9 @@ impl Default for Config {
             tor_javascript: true,
             tor_use_bridges: false,
             tor_bridges: Vec::new(),
+            password_manager: String::new(),
+            pm_database: String::new(),
+            pm_keyfile: String::new(),
         }
     }
 }

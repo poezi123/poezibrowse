@@ -407,6 +407,21 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
             }
         }
     }
+    if authorized {
+        let action = param(params, "passwords").map(String::from);
+        if let (Some(action), Some(app)) = (action, app.rc()) {
+            gtk::glib::idle_add_local_once(move || {
+                let Some(window) = app.last_window_pub() else { return };
+                let parent: &gtk::Window = gtk::prelude::Cast::upcast_ref(&window.window);
+                match action.as_str() {
+                    "setup" => app.passwords.setup_dialog(parent),
+                    "manager" => app.passwords.manager_window(parent),
+                    "lock" => app.passwords.lock(),
+                    _ => {}
+                }
+            });
+        }
+    }
     if authorized && param(params, "save").is_some() {
         let mut c = app.config.borrow().clone();
         let text = |k: &str| param(params, k).map(|v| v.trim().to_string());
@@ -555,6 +570,18 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         ),
         row("Brückenarten", "Programme für die Brücken (Pluggable Transports)", transports),
     ];
+    let password_rows = [
+        row("Passwortmanager", "KeePassXC-Datenbank oder eigener Manager", escape(&app.passwords.status_text())),
+        row(
+            "",
+            "Ausfüllen nur nach Klick auf den Schlüssel, Speichern nur nach „Ja“. Das Master-Passwort wird mit dem TPM-Chip verschlüsselt und nach 7 Tagen neu abgefragt.",
+            format!(
+                "<a class=\"button\" href=\"poezi://settings?token={token}&amp;passwords=setup#passwoerter\">Einrichten / ändern</a> \
+                 <a class=\"button\" href=\"poezi://settings?token={token}&amp;passwords=manager#passwoerter\">Öffnen</a> \
+                 <a class=\"button danger\" href=\"poezi://settings?token={token}&amp;passwords=lock#passwoerter\">Sperren</a>"
+            ),
+        ),
+    ];
     let appearance = [
         row(
             "Erscheinungsbild",
@@ -593,12 +620,14 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
              <h2>Erscheinungsbild</h2><div class=\"settings\">{}</div>\
              <h2 id=\"hintergrund\">Hintergrund</h2><div class=\"settings\">{}</div>\
              <h2 id=\"tor\">Tor-Modus</h2><div class=\"settings\">{}</div>\
+             <h2 id=\"passwoerter\">Passwörter</h2><div class=\"settings\">{}</div>\
              <h2>Browser</h2><div class=\"settings\">{}</div>\
              <p><button type=\"submit\">Speichern</button></p></form>",
             app.token,
             appearance.concat(),
             wallpaper_rows.concat(),
             tor_rows.concat(),
+            password_rows.concat(),
             rows.concat()
         ),
     )

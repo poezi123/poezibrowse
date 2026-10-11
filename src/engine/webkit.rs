@@ -30,7 +30,7 @@ pub struct WebKitEngine {
     tabs_per_process: u32,
     mode: Mode,
     process_groups: RefCell<Vec<Vec<glib::WeakRef<WebView>>>>,
-    content_manager_hook: RefCell<Option<Rc<dyn Fn(&UserContentManager)>>>,
+    content_manager_hook: RefCell<Option<Rc<dyn Fn(&UserContentManager, &WebView)>>>,
     blocking: RefCell<Option<Blocking>>,
     youtube: crate::youtube::YoutubeBlocker,
     managers: RefCell<Vec<glib::WeakRef<UserContentManager>>>,
@@ -159,7 +159,7 @@ impl WebKitEngine {
         if self.mode.is_private() { None } else { self.context.favicon_database() }
     }
 
-    pub fn set_content_manager_hook(&self, hook: Rc<dyn Fn(&UserContentManager)>) {
+    pub fn set_content_manager_hook(&self, hook: Rc<dyn Fn(&UserContentManager, &WebView)>) {
         *self.content_manager_hook.borrow_mut() = Some(hook);
     }
 
@@ -238,9 +238,6 @@ impl WebKitEngine {
             }
             self.youtube.apply(&ucm, true);
         }
-        if let Some(hook) = self.content_manager_hook.borrow().clone() {
-            hook(&ucm);
-        }
         self.managers.borrow_mut().push(ucm.downgrade());
         ucm
     }
@@ -267,6 +264,9 @@ impl WebKitEngine {
                 view
             }
         };
+        if let Some(hook) = self.content_manager_hook.borrow().clone() {
+            hook(&ucm, &view);
+        }
         WebKitPage::new(self.clone(), view, ucm)
     }
 }
@@ -607,6 +607,9 @@ impl Page for PageHandle {
         if let Some(inspector) = self.0.view.inspector() {
             inspector.show();
         }
+    }
+    fn webview(&self) -> Option<WebView> {
+        Some(self.0.view.clone())
     }
     fn save_state(&self) -> Option<Vec<u8>> {
         let state = self.0.view.session_state()?;

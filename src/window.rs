@@ -34,6 +34,7 @@ pub struct BrowserWindow {
     pub downloads: gtk::ListBox,
     password_button: gtk::Button,
     circuit_button: gtk::Button,
+    prompt_holder: gtk::Box,
     suggestions: gtk::ListStore,
     favorites_bar: gtk::Box,
     favorites: gtk::Box,
@@ -209,6 +210,7 @@ impl BrowserWindow {
             ("win.new-private-tab", sidebar::PRIVATE_ICON, "Neuer privater Tab (Strg+Umschalt+P)"),
             ("win.new-tor-tab", sidebar::TOR_ICON, "Neuer Tor-Tab (Strg+Umschalt+U)"),
             ("win.sleep-tab", Icon::Theme("weather-clear-night-symbolic"), "Hintergrund-Tabs schlafen legen (RAM freigeben)"),
+            ("win.passwords", Icon::Theme("dialog-password-symbolic"), "Passwortmanager öffnen"),
         ] {
             let b = sidebar::button(&icon, tip, scale);
             b.set_action_name(Some(action));
@@ -246,7 +248,9 @@ impl BrowserWindow {
         find_revealer.set_transition_type(gtk::RevealerTransitionType::SlideUp);
         find_revealer.add(&find_box);
 
+        let prompt_holder = gtk::Box::new(Orientation::Vertical, 0);
         let content = gtk::Box::new(Orientation::Vertical, 0);
+        content.pack_start(&prompt_holder, false, false, 0);
         content.pack_start(&overlay, true, true, 0);
         content.pack_start(&find_revealer, false, false, 0);
         let body = gtk::Box::new(Orientation::Horizontal, 0);
@@ -276,6 +280,7 @@ impl BrowserWindow {
             downloads,
             password_button,
             circuit_button,
+            prompt_holder,
             suggestions,
             favorites_bar,
             favorites,
@@ -366,8 +371,8 @@ impl BrowserWindow {
         let w = self.weak();
         self.password_button.connect_clicked(move |button| {
             with(&w, |w| {
-                let uri = w.current_tab().map(|t| t.uri()).unwrap_or_default();
-                crate::passwords::on_button_clicked(button, &uri);
+                let view = w.current_tab().and_then(|t| t.page.borrow().as_ref().and_then(|p| p.webview()));
+                w.app.passwords.button_clicked(w.window.upcast_ref(), button, view, w.current_mode());
             })
         });
 
@@ -570,6 +575,9 @@ impl BrowserWindow {
             }),
             ("settings", |w| {
                 w.open_tab("poezi://settings", false);
+            }),
+            ("passwords", |w| {
+                w.app.passwords.manager_window(w.window.upcast_ref());
             }),
             ("about", |w| {
                 w.open_tab("poezi://about", false);
@@ -1051,6 +1059,7 @@ impl BrowserWindow {
         let uri = tab.as_ref().map(|t| t.uri()).unwrap_or_default();
         self.update_entry_icons(&uri);
         self.update_mode_look(tab.as_ref().map(|t| t.mode).unwrap_or(Mode::Normal));
+        self.update_password_button();
         if !self.entry.has_focus() {
             let shown = if uri.starts_with("poezi://start") || uri.starts_with("poezi://tor") { "" } else { uri.as_str() };
             self.entry.set_text(shown);
@@ -1542,6 +1551,67 @@ impl BrowserWindow {
 
     pub fn tor_status_changed(&self) {
         self.update_mode_look(self.current_mode());
+    }
+
+    pub fn has_view(&self, view: &webkit2gtk::WebView) -> bool {
+        self.tabs.borrow().iter().any(|t| t.page.borrow().as_ref().and_then(|p| p.webview()).as_ref() == Some(view))
+    }
+
+    pub fn update_password_button(&self) {
+        let view = self.current_tab().and_then(|t| t.page.borrow().as_ref().and_then(|p| p.webview()));
+        let info = view.map(|v| self.app.passwords.page_info(&v)).unwrap_or_default();
+        let style = self.password_button.style_context();
+        if info.known && self.current_mode() != Mode::Tor {
+            style.add_class("has-login");
+            self.password_button.set_tooltip_text(Some(&format!("Gespeicherte Logins für {} – klicken zum Ausfüllen", info.host)));
+        } else {
+            style.remove_class("has-login");
+            self.password_button.set_tooltip_text(Some(if info.signup {
+                "Registrierung erkannt – klicken, um ein sicheres Passwort zu erzeugen"
+            } else if info.login {
+                "Login-Formular erkannt – klicken für Passwörter"
+            } else {
+                "Passwörter"
+            }));
+        }
+    }
+
+    pub fn show_prompt(&self, question: &str, yes: &str, no: &str, answer: impl Fn(bool) + 'static) {
+        for child in self.prompt_holder.children() {
+            self.prompt_holder.remove(&child);
+        }
+        let bar = gtk::InfoBar::new();
+        bar.style_context().add_class("poezi-prompt");
+        bar.set_message_type(gtk::MessageType::Question);
+        let label = gtk::Label::new(Some(question));
+        label.set_xalign(0.0);
+        label.set_line_wrap(true);
+        bar.content_area().add(&label);
+        bar.add_button(no, gtk::ResponseType::No);
+        if let Some(button) = bar.add_button(yes, gtk::ResponseType::Yes) {
+            button.style_context().add_class("prompt-yes");
+        }
+        let answered = Rc::new(Cell::new(false));
+        let a = answered.clone();
+        bar.connect_response(move |bar, response| {
+            if !a.replace(true) {
+                answer(response == gtk::ResponseType::Yes);
+            }
+            bar.hide();
+            if let Some(parent) = bar.parent() {
+                if let Ok(container) = parent.downcast::<gtk::Container>() {
+                    container.remove(bar);
+                }
+            }
+        });
+        self.prompt_holder.pack_start(&bar, false, false, 0);
+        bar.show_all();
+        let b = bar.downgrade();
+        glib::timeout_add_local_once(std::time::Duration::from_secs(90), move || {
+            if let Some(bar) = b.upgrade() {
+                bar.response(gtk::ResponseType::No);
+            }
+        });
     }
 
     fn update_mode_look(&self, mode: Mode) {

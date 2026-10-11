@@ -1,6 +1,6 @@
 
 pkgname=poezibrowse
-pkgver=0.2.2
+pkgver=0.3.0
 pkgrel=1
 pkgdesc='Schlanker Webbrowser für Linux, geschrieben in Rust'
 arch=('x86_64')
@@ -10,6 +10,7 @@ depends=('webkit2gtk-4.1' 'gtk3' 'glib2' 'cairo' 'pango' 'gdk-pixbuf2' 'sqlite' 
 makedepends=('cargo' 'pkgconf')
 optdepends=('xdg-dbus-proxy: Sandbox für Webseiten-Prozesse'
             'tor: Tor-Modus'
+            'keepassxc: Logins in einer KeePassXC-Datenbank speichern'
             'lyrebird-proxy: Tor-Brücken obfs4, webtunnel und meek'
             'snowflake-pt-client-git: Tor-Brücke Snowflake')
 options=('!lto' '!debug')
