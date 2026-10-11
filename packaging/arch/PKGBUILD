@@ -11,6 +11,9 @@ makedepends=('cargo' 'pkgconf')
 optdepends=('xdg-dbus-proxy: Sandbox für Webseiten-Prozesse'
             'tor: Tor-Modus'
             'keepassxc: Logins in einer KeePassXC-Datenbank speichern'
+            'gst-plugin-dav1d: schnelle AV1-Videodekodierung'
+            'gst-libav: H.264/AAC-Videos'
+            'gst-plugins-good: VP8/VP9/Opus-Videos'
             'lyrebird-proxy: Tor-Brücken obfs4, webtunnel und meek'
             'snowflake-pt-client-git: Tor-Brücke Snowflake')
 options=('!lto' '!debug')

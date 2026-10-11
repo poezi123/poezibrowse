@@ -762,6 +762,13 @@ fn load_css() {
         popover.passwords button.login-entry { background-image: none; background-color: #1a2030; color: #e3e7ee; border: 1px solid #262d3d; border-radius: 10px; padding: 6px 10px; }
         popover.passwords button.login-entry:hover { border-color: #13b5b1; }
         popover.passwords label.dim-label { color: #8f98a8; }
+        window.password-manager, window.password-manager list, window.password-manager scrolledwindow, window.password-manager viewport { background-color: #0f131b; color: #e3e7ee; }
+        window.password-manager row { border-bottom: 1px solid #1b2130; }
+        window.password-manager row:hover { background-color: alpha(#ffffff, 0.04); }
+        window.password-manager label.dim-label { color: #8f98a8; }
+        window.password-manager entry { background-color: #151a24; color: #e8ecf2; border: 1px solid #262d3d; border-radius: 999px; }
+        window.password-manager button { background-image: none; background-color: #1a2030; color: #e3e7ee; border: 1px solid #262d3d; border-radius: 999px; }
+        window.password-manager button:hover { border-color: #13b5b1; }
         .circuit-flag { font-size: 1.5em; }
         popover.circuit .panel-title { font-weight: 700; }
         popover.circuit { background-color: #121722; color: #e3e7ee; border: 1px solid #262d3d; }

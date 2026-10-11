@@ -35,6 +35,13 @@ pub struct PageInfo {
     pub known: bool,
 }
 
+struct Pending {
+    host: String,
+    username: String,
+    password: Zeroizing<String>,
+    at: Instant,
+}
+
 #[derive(Default)]
 struct Index {
     hashes: HashSet<[u8; 32]>,
@@ -48,6 +55,7 @@ pub struct PasswordManager {
     index: RefCell<Index>,
     pages: RefCell<Vec<(glib::WeakRef<WebView>, PageInfo)>>,
     recent_submit: RefCell<Option<(String, String, Instant)>>,
+    pending: RefCell<Vec<(glib::WeakRef<WebView>, Pending)>>,
     script: std::cell::OnceCell<UserScript>,
     me: Weak<PasswordManager>,
 }
@@ -118,6 +126,7 @@ impl PasswordManager {
             index: RefCell::new(Index::default()),
             pages: RefCell::new(Vec::new()),
             recent_submit: RefCell::new(None),
+            pending: RefCell::new(Vec::new()),
             script: std::cell::OnceCell::new(),
             me: me.clone(),
         })
@@ -216,6 +225,11 @@ impl PasswordManager {
             Some("fields") => {
                 let login = message.get("login").and_then(|v| v.as_bool()).unwrap_or(false);
                 let signup = message.get("signup").and_then(|v| v.as_bool()).unwrap_or(false);
+                if let Some(pending) = self.take_pending(view) {
+                    if !login && pending.at.elapsed() < Duration::from_secs(120) {
+                        self.on_submit(view, pending.host, pending.username, pending.password);
+                    }
+                }
                 let me = self.clone();
                 let view = view.clone();
                 self.ensure_index(move || {
@@ -238,10 +252,18 @@ impl PasswordManager {
                     }
                     *recent = Some((host.clone(), username.clone(), Instant::now()));
                 }
-                self.on_submit(view, host, username, password);
+                let mut pending = self.pending.borrow_mut();
+                pending.retain(|(w, _)| w.upgrade().is_some_and(|v| &v != view));
+                pending.push((view.downgrade(), Pending { host, username, password, at: Instant::now() }));
             }
             _ => {}
         }
+    }
+
+    fn take_pending(&self, view: &WebView) -> Option<Pending> {
+        let mut pending = self.pending.borrow_mut();
+        let index = pending.iter().position(|(w, _)| w.upgrade().as_ref() == Some(view))?;
+        Some(pending.remove(index).1)
     }
 
     fn host_known(&self, host: &str) -> bool {
@@ -513,12 +535,21 @@ impl PasswordManager {
             self.ask_save(&window, question, host, username, password, None);
             return;
         }
-        if self.cache.get(Kind::Master).is_none() {
-            return;
-        }
         let me = self.clone();
         let parent = window.window.clone().upcast::<gtk::Window>();
-        self.with_logins(&parent, move |logins, _| {
+        let cached = self.cache.get(Kind::Master);
+        let Some(location) = self.location() else { return };
+        glib::MainContext::default().spawn_local(async move {
+            let loaded = match cached {
+                Some(m) => Some(m),
+                None => gio::spawn_blocking(|| secret::load(Kind::Master)).await.ok().flatten(),
+            };
+            let Some(master) = loaded else { return };
+            me.cache.put(Kind::Master, &master);
+            let check = master.clone();
+            let logins = gio::spawn_blocking(move || vault::open(&location, &check)).await.ok().and_then(Result::ok);
+            let Some(logins) = logins else { return };
+            let _ = &parent;
             let matching: Vec<&Login> = logins.iter().filter(|l| vault::host_matches(&l.url, &host)).collect();
             if let Some(existing) = matching.iter().find(|l| l.username == username) {
                 if *existing.password != *password {
@@ -614,6 +645,7 @@ impl PasswordManager {
         let me = self.clone();
         dialog.connect_response(move |dialog, response| {
             if response != gtk::ResponseType::Accept {
+                dialog.hide();
                 dialog.close();
                 return;
             }
@@ -634,6 +666,7 @@ impl PasswordManager {
                         me.cache.put(Kind::Master, &password);
                         let stored = password.clone();
                         let _ = gio::spawn_blocking(move || secret::store(Kind::Master, &stored)).await;
+                        dialog.hide();
                         dialog.close();
                         if let Some(then) = then.borrow_mut().take() {
                             then(password);
@@ -740,12 +773,14 @@ impl PasswordManager {
                 if app.config.borrow().password_manager.is_empty() {
                     app.set_layout_option(|c| c.password_manager = "off".into());
                 }
+                dialog.hide();
                 dialog.close();
                 return;
             }
             if none.is_active() {
                 me.lock();
                 app.set_layout_option(|c| c.password_manager = "off".into());
+                dialog.hide();
                 dialog.close();
                 return;
             }
@@ -816,6 +851,7 @@ impl PasswordManager {
                             app.password_state_changed();
                         }
                         let parent = dialog.transient_for();
+                        dialog.hide();
                         dialog.close();
                         if let Some(parent) = parent {
                             info_dialog(

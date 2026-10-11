@@ -33,6 +33,7 @@ pub struct WebKitEngine {
     content_manager_hook: RefCell<Option<Rc<dyn Fn(&UserContentManager, &WebView)>>>,
     blocking: RefCell<Option<Blocking>>,
     youtube: crate::youtube::YoutubeBlocker,
+    media_fix: webkit2gtk::UserScript,
     managers: RefCell<Vec<glib::WeakRef<UserContentManager>>>,
 }
 
@@ -104,7 +105,6 @@ impl WebKitEngine {
         });
 
         let settings = Settings::new();
-        settings.set_enable_hyperlink_auditing(false);
         settings.set_enable_dns_prefetching(false);
         settings.set_enable_developer_extras(true);
         settings.set_enable_smooth_scrolling(true);
@@ -143,6 +143,13 @@ impl WebKitEngine {
             content_manager_hook: RefCell::new(None),
             blocking: RefCell::new(None),
             youtube: crate::youtube::YoutubeBlocker::new(),
+            media_fix: webkit2gtk::UserScript::new(
+                include_str!("media_fix.js"),
+                webkit2gtk::UserContentInjectedFrames::AllFrames,
+                webkit2gtk::UserScriptInjectionTime::Start,
+                &[],
+                &[],
+            ),
             managers: RefCell::new(Vec::new()),
         })
     }
@@ -232,6 +239,7 @@ impl WebKitEngine {
 
     fn new_content_manager(&self) -> UserContentManager {
         let ucm = UserContentManager::new();
+        webkit2gtk::UserContentManagerExt::add_script(&ucm, &self.media_fix);
         if let Some(blocking) = self.blocking.borrow().as_ref() {
             for filter in blocking.blocker.filters.borrow().iter() {
                 blocker::add_filter(&ucm, filter);
