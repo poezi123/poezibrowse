@@ -13,7 +13,7 @@ Keywords=Browser;Web;Internet;WWW;Werbeblocker;
 MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
 StartupNotify=true
 StartupWMClass=poezibrowse
-Actions=new-window;new-private-window;
+Actions=new-window;new-private-window;new-tor-window;
 
 [Desktop Action new-window]
 Name=Neues Fenster
@@ -24,3 +24,8 @@ Exec=poezibrowse --new-window
 Name=Neues privates Fenster
 Name[en]=New Private Window
 Exec=poezibrowse --private-window
+
+[Desktop Action new-tor-window]
+Name=Neues Tor-Fenster
+Name[en]=New Tor Window
+Exec=poezibrowse --tor-window

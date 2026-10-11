@@ -5,7 +5,7 @@ use gtk::cairo;
 use gtk::glib;
 use gtk::prelude::*;
 
-use crate::config::Config;
+use crate::config::{Config, Mode};
 
 const DRIFT_PIXELS_PER_SECOND: f64 = 8.0;
 const TEXTURE: &[u8] = include_bytes!("../assets/titelleiste.png");
@@ -20,7 +20,7 @@ struct State {
     pattern: bool,
     animation: bool,
     fps: u32,
-    private: bool,
+    mode: Option<Mode>,
     offset: f64,
     last_us: i64,
     tick: Option<gtk::TickCallbackId>,
@@ -33,9 +33,9 @@ pub struct TitleBar {
 }
 
 impl TitleBar {
-    pub fn install(header: &gtk::HeaderBar, config: &Config, private: bool) -> TitleBar {
+    pub fn install(header: &gtk::HeaderBar, config: &Config, mode: Mode) -> TitleBar {
         header.style_context().add_class("poezi");
-        let state = Rc::new(RefCell::new(State { private, ..State::default() }));
+        let state = Rc::new(RefCell::new(State { mode: Some(mode), ..State::default() }));
         let s = state.clone();
         header.connect_draw(move |widget, cr| {
             draw(widget, cr, &s.borrow());
@@ -136,11 +136,16 @@ fn draw(widget: &gtk::HeaderBar, cr: &cairo::Context, s: &State) {
         });
     }
 
-    if s.private {
-        let tint = cairo::LinearGradient::new(0.0, 0.0, width, 0.0);
-        tint.add_color_stop_rgba(0.0, 0.42, 0.10, 0.62, 0.55);
-        tint.add_color_stop_rgba(1.0, 0.62, 0.08, 0.42, 0.45);
-        let _ = cr.set_source(&tint);
+    let tint = match s.mode {
+        Some(Mode::Private) => Some([(0.42, 0.10, 0.62, 0.55), (0.62, 0.08, 0.42, 0.45)]),
+        Some(Mode::Tor) => Some([(0.49, 0.27, 0.60, 0.60), (0.20, 0.55, 0.35, 0.40)]),
+        _ => None,
+    };
+    if let Some([a, b]) = tint {
+        let gradient = cairo::LinearGradient::new(0.0, 0.0, width, 0.0);
+        gradient.add_color_stop_rgba(0.0, a.0, a.1, a.2, a.3);
+        gradient.add_color_stop_rgba(1.0, b.0, b.1, b.2, b.3);
+        let _ = cr.set_source(&gradient);
         cr.rectangle(0.0, 0.0, width, height);
         let _ = cr.fill();
     }

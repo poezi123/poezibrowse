@@ -12,11 +12,13 @@ use webkit2gtk::{
     WebsiteDataManager, WebsiteDataManagerExt, WebsitePolicies, FindOptions, FindControllerExt,
     PolicyDecisionExt, URIRequestExt, WebInspectorExt, HitTestResultExt, NavigationPolicyDecisionExt,
     ResponsePolicyDecisionExt, PrintOperationExt, SecurityManagerExt, BackForwardListExt,
+    NetworkProxyMode, NetworkProxySettings, WebsiteDataManagerExtManual, WebsiteDataTypes,
+    ContextMenuAction, ContextMenuExt, ContextMenuItem, ContextMenuItemExt,
 };
 
 use super::{EventSink, Page, PageEvent, SinkSlot};
 use crate::blocker::{self, Blocker};
-use crate::config::{self, Config, EngineKind};
+use crate::config::{self, Config, EngineKind, Mode};
 
 pub type SchemeHandler = Rc<dyn Fn(&str) -> (String, Vec<u8>)>;
 
@@ -24,11 +26,13 @@ pub struct WebKitEngine {
     context: WebContext,
     settings: Settings,
     policies: WebsitePolicies,
+    data_manager: WebsiteDataManager,
     tabs_per_process: u32,
-    private: bool,
+    mode: Mode,
     process_groups: RefCell<Vec<Vec<glib::WeakRef<WebView>>>>,
     content_manager_hook: RefCell<Option<Rc<dyn Fn(&UserContentManager)>>>,
     blocking: RefCell<Option<Blocking>>,
+    youtube: crate::youtube::YoutubeBlocker,
     managers: RefCell<Vec<glib::WeakRef<UserContentManager>>>,
 }
 
@@ -39,7 +43,7 @@ pub struct Blocking {
 }
 
 impl WebKitEngine {
-    pub fn new(config: &Config, private: bool, scheme_handler: SchemeHandler) -> Rc<Self> {
+    pub fn new(config: &Config, mode: Mode, tor_port: u16, scheme_handler: SchemeHandler) -> Rc<Self> {
         let mut pressure = MemoryPressureSettings::new();
         if config.memory_limit_mb > 0 {
             pressure.set_memory_limit(config.memory_limit_mb);
@@ -47,7 +51,7 @@ impl WebKitEngine {
         pressure.set_conservative_threshold(0.33);
         pressure.set_strict_threshold(0.5);
 
-        let data_manager = if private {
+        let data_manager = if mode.is_private() {
             WebsiteDataManager::new_ephemeral()
         } else {
             let data = config::data_dir().join("webkit");
@@ -59,17 +63,28 @@ impl WebKitEngine {
         };
         data_manager.set_itp_enabled(true);
         WebsiteDataManager::set_memory_pressure_settings(&mut pressure.clone());
+        if mode == Mode::Tor {
+            let proxy = format!("socks5://127.0.0.1:{tor_port}");
+            let mut proxy_settings = NetworkProxySettings::new(Some(&proxy), &[]);
+            data_manager.set_network_proxy_settings(NetworkProxyMode::Custom, Some(&mut proxy_settings));
+        }
 
-        let context = WebContext::builder()
+        let mut builder = WebContext::builder()
             .website_data_manager(&data_manager)
-            .memory_pressure_settings(&pressure)
-            .build();
+            .memory_pressure_settings(&pressure);
+        if mode == Mode::Tor {
+            builder = builder.time_zone_override("Etc/UTC");
+        }
+        let context = builder.build();
+        if mode == Mode::Tor {
+            context.set_preferred_languages(&["en-US", "en"]);
+        }
         context.set_cache_model(if config.saver_mode {
             CacheModel::DocumentBrowser
         } else {
             CacheModel::WebBrowser
         });
-        if !private {
+        if !mode.is_private() {
             let favicons = config::cache_dir().join("favicons");
             context.set_favicon_database_directory(Some(&favicons.to_string_lossy()));
         }
@@ -101,6 +116,13 @@ impl WebKitEngine {
         } else {
             HardwareAccelerationPolicy::Never
         });
+        if mode == Mode::Tor {
+            settings.set_enable_webrtc(false);
+            settings.set_enable_media_stream(false);
+            settings.set_enable_webgl(false);
+            settings.set_enable_encrypted_media(false);
+            settings.set_enable_javascript(config.tor_javascript);
+        }
 
         let policies = WebsitePolicies::builder()
             .autoplay(if config.autoplay_sound {
@@ -114,11 +136,13 @@ impl WebKitEngine {
             context,
             settings,
             policies,
+            data_manager,
             tabs_per_process: config.tabs_per_process.max(1),
-            private,
+            mode,
             process_groups: RefCell::new(Vec::new()),
             content_manager_hook: RefCell::new(None),
             blocking: RefCell::new(None),
+            youtube: crate::youtube::YoutubeBlocker::new(),
             managers: RefCell::new(Vec::new()),
         })
     }
@@ -127,8 +151,12 @@ impl WebKitEngine {
         &self.context
     }
 
-    pub fn is_private(&self) -> bool {
-        self.private
+    pub fn release_memory(&self) {
+        self.data_manager.clear(WebsiteDataTypes::MEMORY_CACHE, glib::TimeSpan(0), None::<&gtk::gio::Cancellable>, |_| {});
+    }
+
+    pub fn favicon_database(&self) -> Option<webkit2gtk::FaviconDatabase> {
+        if self.mode.is_private() { None } else { self.context.favicon_database() }
     }
 
     pub fn set_content_manager_hook(&self, hook: Rc<dyn Fn(&UserContentManager)>) {
@@ -193,7 +221,9 @@ impl WebKitEngine {
         let Some(blocking) = self.blocking.borrow().clone() else { return };
         let host = config::host_of(uri).unwrap_or_default();
         blocker::remove_filters(ucm);
-        if (blocking.enabled_for)(&host) {
+        let enabled = (blocking.enabled_for)(&host);
+        self.youtube.apply(ucm, enabled);
+        if enabled {
             for filter in blocking.blocker.filters.borrow().iter() {
                 blocker::add_filter(ucm, filter);
             }
@@ -206,6 +236,7 @@ impl WebKitEngine {
             for filter in blocking.blocker.filters.borrow().iter() {
                 blocker::add_filter(&ucm, filter);
             }
+            self.youtube.apply(&ucm, true);
         }
         if let Some(hook) = self.content_manager_hook.borrow().clone() {
             hook(&ucm);
@@ -255,14 +286,6 @@ impl WebKitPage {
         page
     }
 
-    pub fn view(&self) -> &WebView {
-        &self.view
-    }
-
-    pub fn content_manager(&self) -> &UserContentManager {
-        &self.content_manager
-    }
-
     pub fn restore_state(&self, data: &[u8]) -> bool {
         let state = WebViewSessionState::new(&glib::Bytes::from(data));
         self.view.restore_session_state(&state);
@@ -290,7 +313,7 @@ impl WebKitPage {
         let s = sink.clone();
         v.connect_estimated_load_progress_notify(move |v| s.emit(PageEvent::Progress(v.estimated_load_progress())));
         let s = sink.clone();
-        v.connect_is_loading_notify(move |v| s.emit(PageEvent::LoadingChanged(v.is_loading())));
+        v.connect_is_loading_notify(move |_| s.emit(PageEvent::LoadingChanged));
         let s = sink.clone();
         let engine = Rc::downgrade(&self.engine);
         let ucm = self.content_manager.clone();
@@ -340,6 +363,53 @@ impl WebKitPage {
 
         let s = sink.clone();
         v.connect_decide_policy(move |_, decision, kind| decide_policy(&s, decision, kind));
+
+        v.connect_scroll_event(|view, event| {
+            if !event.state().contains(gtk::gdk::ModifierType::CONTROL_MASK) {
+                return glib::Propagation::Proceed;
+            }
+            let delta = match event.direction() {
+                gtk::gdk::ScrollDirection::Up => -1.0,
+                gtk::gdk::ScrollDirection::Down => 1.0,
+                gtk::gdk::ScrollDirection::Smooth => event.delta().1,
+                _ => 0.0,
+            };
+            if delta != 0.0 {
+                let step = if delta < 0.0 { 0.1 } else { -0.1 };
+                view.set_zoom_level((view.zoom_level() + step).clamp(0.3, 5.0));
+            }
+            glib::Propagation::Stop
+        });
+
+        let s = sink.clone();
+        v.connect_context_menu(move |_, menu, _, hit| {
+            let new_tab_item = |label: &str, uri: Option<glib::GString>, background: bool| {
+                let uri = uri?.to_string();
+                let action = gtk::gio::SimpleAction::new("open-in-tab", None);
+                let s = s.clone();
+                action.connect_activate(move |_, _| s.emit(PageEvent::OpenInNewTab(uri.clone(), background)));
+                Some(ContextMenuItem::from_gaction(&action, label, None))
+            };
+            for (position, item) in menu.items().into_iter().enumerate() {
+                let replacement = match item.stock_action() {
+                    ContextMenuAction::OpenLinkInNewWindow => new_tab_item("Link in neuem Tab öffnen", hit.link_uri(), true),
+                    ContextMenuAction::OpenImageInNewWindow => new_tab_item("Bild in neuem Tab öffnen", hit.image_uri(), false),
+                    ContextMenuAction::OpenVideoInNewWindow | ContextMenuAction::OpenAudioInNewWindow => {
+                        new_tab_item("Medium in neuem Tab öffnen", hit.media_uri(), false)
+                    }
+                    ContextMenuAction::OpenFrameInNewWindow => {
+                        menu.remove(&item);
+                        continue;
+                    }
+                    _ => continue,
+                };
+                if let Some(new_item) = replacement {
+                    menu.remove(&item);
+                    menu.insert(&new_item, position as i32);
+                }
+            }
+            false
+        });
 
         v.connect_permission_request(|view, request| handle_permission(view, request));
 
@@ -481,9 +551,6 @@ impl Page for PageHandle {
     }
     fn is_loading(&self) -> bool {
         self.0.view.is_loading()
-    }
-    fn progress(&self) -> f64 {
-        self.0.view.estimated_load_progress()
     }
     fn zoom(&self) -> f64 {
         self.0.view.zoom_level()

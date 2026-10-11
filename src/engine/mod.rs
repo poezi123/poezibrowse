@@ -7,7 +7,7 @@ pub enum PageEvent {
     TitleChanged,
     UriChanged,
     Progress(f64),
-    LoadingChanged(bool),
+    LoadingChanged,
     LoadFinished,
     NavigationStateChanged,
     FaviconChanged,
@@ -57,7 +57,6 @@ pub trait Page {
     fn can_go_back(&self) -> bool;
     fn can_go_forward(&self) -> bool;
     fn is_loading(&self) -> bool;
-    fn progress(&self) -> f64;
 
     fn zoom(&self) -> f64;
     fn set_zoom(&self, level: f64);

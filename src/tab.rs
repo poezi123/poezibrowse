@@ -19,6 +19,7 @@ pub struct Tab {
     pub id: u64,
     pub container: gtk::Box,
     pub label: gtk::EventBox,
+    chip: gtk::Box,
     icon: gtk::Image,
     spinner: gtk::Spinner,
     title: gtk::Label,
@@ -35,6 +36,7 @@ impl Tab {
         container.show();
 
         let row = gtk::Box::new(Orientation::Horizontal, 6);
+        row.style_context().add_class("tab-chip");
         let icon = gtk::Image::from_icon_name(Some("text-html-symbolic"), gtk::IconSize::Menu);
         let spinner = gtk::Spinner::new();
         let title = gtk::Label::new(Some("Neuer Tab"));
@@ -67,6 +69,7 @@ impl Tab {
             id,
             container,
             label,
+            chip: row,
             icon,
             spinner,
             title,
@@ -77,6 +80,15 @@ impl Tab {
             last_active: Cell::new(Instant::now()),
         };
         tab
+    }
+
+    pub fn set_active(&self, active: bool) {
+        let style = self.chip.style_context();
+        if active {
+            style.add_class("active");
+        } else {
+            style.remove_class("active");
+        }
     }
 
     pub fn is_sleeping(&self) -> bool {

@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::config::{self, Config, EngineKind, Theme, SEARCH_ENGINES};
+use crate::config::{self, Config, EngineKind, Theme, SEARCH_ENGINES, WALLPAPER_PRESETS};
 use crate::memory;
 use crate::storage::Entry;
 
@@ -75,13 +75,50 @@ table.stats td:last-child { text-align: right; font-variant-numeric: tabular-num
 @media (max-width: 600px) { .settings { grid-template-columns: 1fr; } }
 "#;
 
+pub const WALLPAPER_MAX_BYTES: u64 = 25 * 1024 * 1024;
+
+pub fn wallpaper_path() -> std::path::PathBuf {
+    config::data_dir().join("wallpaper")
+}
+
+const WALLPAPER_STYLE: &str = r#"
+body.wall { color: #f4f6fa; background: #05070d; min-height: 100vh; }
+.wall-bg { position: fixed; inset: -40px; z-index: -2; background-size: cover; background-position: center; }
+.wall-dim { position: fixed; inset: 0; z-index: -1; }
+body.wall h1 .logo { color: #ffffff; text-shadow: 0 2px 18px rgba(0,0,0,.45); }
+body.wall h2, body.wall .muted { color: rgba(244,246,250,.82); text-shadow: 0 1px 8px rgba(0,0,0,.5); }
+body.wall a { color: #7ff0e8; }
+body.wall form.search input { background: rgba(10,14,22,.55); color: #fff; border-color: rgba(255,255,255,.22);
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+body.wall form.search input::placeholder { color: rgba(255,255,255,.65); }
+body.wall .tile { background: rgba(10,14,22,.5); border-color: rgba(255,255,255,.14); color: #fff;
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+body.wall .tile:hover { border-color: #13b5b1; background: rgba(10,14,22,.65); }
+.corner { position: fixed; right: 18px; bottom: 16px; font-size: 13px; padding: 7px 14px; border-radius: 999px;
+  background: rgba(10,14,22,.5); color: #fff !important; border: 1px solid rgba(255,255,255,.18);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+body:not(.wall) .corner { background: var(--card); color: var(--fg) !important; border-color: var(--line); }
+.presets { display:flex; gap:28px 10px; flex-wrap: wrap; padding-bottom: 20px; }
+.preset { width: 92px; height: 58px; border-radius: 12px; border: 2px solid var(--line); display:block; position: relative; }
+.preset.selected { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
+.preset span { position:absolute; left:0; right:0; bottom:-20px; font-size: 11px; text-align:center; color: var(--muted); }
+.progress { height: 10px; border-radius: 999px; background: var(--line); overflow: hidden; margin: 18px 0 8px; }
+.progress div { height: 100%; background: linear-gradient(90deg, #7d4698, #13b5b1); }
+.badge-ok { color: #3fbf6f; font-weight: 600; }
+.badge-err { color: var(--danger); font-weight: 600; }
+"#;
+
 pub fn layout(title: &str, class: &str, body: &str) -> String {
+    layout_with(title, class, "", body)
+}
+
+fn layout_with(title: &str, class: &str, body_class: &str, body: &str) -> String {
     format!(
         "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">\
-         <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action poezi: https:; base-uri 'none'\">\
+         <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data: poezi:; form-action poezi: https: http:; base-uri 'none'\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-         <meta name=\"color-scheme\" content=\"light dark\"><title>{}</title><style>{STYLE}</style></head>\
-         <body><main class=\"{class}\">{body}</main></body></html>",
+         <meta name=\"color-scheme\" content=\"light dark\"><title>{}</title><style>{STYLE}{WALLPAPER_STYLE}</style></head>\
+         <body class=\"{body_class}\"><main class=\"{class}\">{body}</main></body></html>",
         escape(title)
     )
 }
@@ -161,6 +198,8 @@ pub fn handle(uri: &str, app: &App) -> (String, Vec<u8>) {
     let authorized = param(&params, "token") == Some(app.token.as_str());
     let html = match page {
         "start" | "" => start_page(app),
+        "wallpaper" => return wallpaper_image(),
+        "tor" => tor_page(app),
         "history" => history_page(app, &params, authorized),
         "bookmarks" => bookmarks_page(app, &params, authorized),
         "settings" => settings_page(app, &params, authorized),
@@ -168,6 +207,37 @@ pub fn handle(uri: &str, app: &App) -> (String, Vec<u8>) {
         _ => error_page("Nicht gefunden", &format!("Die interne Seite <code>{}</code> gibt es nicht.", escape(uri))),
     };
     ("text/html".into(), html.into_bytes())
+}
+
+fn wallpaper_image() -> (String, Vec<u8>) {
+    let path = wallpaper_path();
+    let too_big = std::fs::metadata(&path).map_or(true, |m| m.len() > WALLPAPER_MAX_BYTES);
+    let bytes = if too_big { Vec::new() } else { std::fs::read(&path).unwrap_or_default() };
+    let (mime, _) = gtk::gio::content_type_guess(None::<&str>, &bytes);
+    let mime = gtk::gio::content_type_get_mime_type(&mime).map(|m| m.to_string()).unwrap_or_default();
+    if !mime.starts_with("image/") || mime.contains("svg") {
+        return ("image/png".into(), Vec::new());
+    }
+    (mime, bytes)
+}
+
+fn wallpaper_css(config: &Config) -> Option<String> {
+    let background = match config.wallpaper.as_str() {
+        "" => return None,
+        "custom" => {
+            if !wallpaper_path().is_file() {
+                return None;
+            }
+            "url(poezi://wallpaper)".to_string()
+        }
+        id => WALLPAPER_PRESETS.iter().find(|(p, _, _)| *p == id)?.2.to_string(),
+    };
+    let dim = config.wallpaper_dim.min(90) as f64 / 100.0;
+    let blur = config.wallpaper_blur.min(40);
+    Some(format!(
+        "<div class=\"wall-bg\" style=\"background: {background}; background-size: cover; background-position: center; filter: blur({blur}px)\"></div>\
+         <div class=\"wall-dim\" style=\"background: rgba(0,0,0,{dim})\"></div>"
+    ))
 }
 
 fn start_page(app: &App) -> String {
@@ -195,14 +265,15 @@ fn start_page(app: &App) -> String {
             .collect();
         format!("<h2>{heading}</h2><div class=\"tiles\">{items}</div>")
     };
-    layout(
+    let wall = wallpaper_css(&config);
+    layout_with(
         "Neuer Tab",
         "start",
+        if wall.is_some() { "wall" } else { "" },
         &format!(
-            "<h1><span class=\"logo\">Poezi<span>Browse</span></span></h1>{}{tiles_html}\
-             <p class=\"muted\" style=\"margin-top:40px\"><a href=\"poezi://bookmarks\">Lesezeichen</a> · \
-             <a href=\"poezi://history\">Verlauf</a> · <a href=\"poezi://settings\">Einstellungen</a> · \
-             <a href=\"poezi://about\">Über</a></p>",
+            "{}<h1><span class=\"logo\">Poezi<span>Browse</span></span></h1>{}{tiles_html}\
+             <a class=\"corner\" href=\"poezi://settings#hintergrund\">Hintergrund ändern</a>",
+            wall.unwrap_or_default(),
             search_form(&config)
         ),
     )
@@ -287,8 +358,54 @@ fn bookmarks_page(app: &App, params: &[(String, String)], authorized: bool) -> S
     layout("Lesezeichen", "", &body)
 }
 
+fn tor_page(app: &App) -> String {
+    let status = app.tor.status();
+    let refresh = if status.running && !status.ready() { "<meta http-equiv=\"refresh\" content=\"1\">" } else { "" };
+    let body = if let Some(error) = &status.error {
+        format!(
+            "<p class=\"badge-err\">{}</p><p>Prüfe die Tor-Einstellungen unter <a href=\"poezi://settings#tor\">Einstellungen</a> \
+             und öffne dann ein neues Tor-Fenster.</p>",
+            escape(error)
+        )
+    } else if status.ready() {
+        "<p class=\"badge-ok\">Verbunden mit dem Tor-Netzwerk.</p>\
+         <p>Alles in diesem Fenster läuft über Tor. Nichts wird gespeichert, und beim Schließen des letzten Tor-Fensters wird alles vergessen.</p>\
+         <form class=\"search\" action=\"https://duckduckgo.com/\" method=\"get\"><input type=\"search\" name=\"q\" placeholder=\"Über Tor mit DuckDuckGo suchen\" autofocus></form>\
+         <h2>Prüfen</h2><p><a href=\"https://check.torproject.org/\">check.torproject.org</a> · \
+         <a href=\"https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/\">DuckDuckGo als .onion</a></p>\
+         <h2>Gut zu wissen</h2><p class=\"muted\">Tor versteckt deine IP-Adresse. Gegen Browser-Fingerprinting schützt der Tor Browser \
+         besser als PoeziBrowse. Wenn es um deine Sicherheit geht (Journalismus, Aktivismus), nimm den Tor Browser.</p>"
+            .to_string()
+    } else if status.running {
+        format!(
+            "<p>Verbinde mit dem Tor-Netzwerk …</p><div class=\"progress\"><div style=\"width:{}%\"></div></div><p class=\"muted\">{} % · {}</p>",
+            status.progress,
+            status.progress,
+            escape(&status.summary)
+        )
+    } else {
+        "<p>Tor ist aus. Öffne ein neues Tor-Fenster, um dich zu verbinden.</p>".to_string()
+    };
+    layout("Tor", "", &format!("<h1><span class=\"logo\">Tor-<span>Modus</span></span></h1>{body}"))
+        .replacen("<head>", &format!("<head>{refresh}"), 1)
+}
+
 fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> String {
     let mut notice = String::new();
+    if authorized {
+        if let Some(choice) = param(params, "wallpaper") {
+            let valid = choice.is_empty() || choice == "custom" || WALLPAPER_PRESETS.iter().any(|(id, _, _)| *id == choice);
+            if choice == "pick" {
+                if let Some(app) = app.rc() {
+                    gtk::glib::idle_add_local_once(move || app.pick_wallpaper());
+                }
+            } else if valid {
+                let mut c = app.config.borrow_mut();
+                c.wallpaper = choice.to_string();
+                c.save();
+            }
+        }
+    }
     if authorized && param(params, "save").is_some() {
         let mut c = app.config.borrow().clone();
         let text = |k: &str| param(params, k).map(|v| v.trim().to_string());
@@ -323,6 +440,13 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         c.titlebar_pattern = flag("titlebar_pattern");
         c.titlebar_animation = flag("titlebar_animation");
         c.titlebar_fps = number("titlebar_fps", 1, 60, c.titlebar_fps);
+        c.wallpaper_dim = number("wallpaper_dim", 0, 90, c.wallpaper_dim);
+        c.wallpaper_blur = number("wallpaper_blur", 0, 40, c.wallpaper_blur);
+        c.show_favorites = flag("show_favorites");
+        c.show_sidebar = flag("show_sidebar");
+        c.tor_javascript = flag("tor_javascript");
+        c.tor_use_bridges = flag("tor_use_bridges");
+        c.tor_bridges = crate::tor::clean_bridges(&text("tor_bridges").unwrap_or_default().lines().map(String::from).collect::<Vec<_>>());
         c.block_allowlist = text("block_allowlist")
             .unwrap_or_default()
             .lines()
@@ -332,6 +456,7 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         c.save();
         *app.config.borrow_mut() = c;
         app.apply_appearance();
+        app.layout_changed();
         notice = "<div class=\"notice\">Gespeichert. Mit * markierte Einstellungen wirken nach einem Neustart von PoeziBrowse.</div>".into();
     }
 
@@ -374,6 +499,61 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
     let theme_option = |value: &str, label: &str, theme: Theme| {
         format!("<option value=\"{value}\"{}>{label}</option>", if c.theme == theme { " selected" } else { "" })
     };
+    let token = &app.token;
+    let preset_link = |id: &str, name: &str, background: &str| {
+        format!(
+            "<a class=\"preset{}\" href=\"poezi://settings?token={token}&amp;wallpaper={id}#hintergrund\" title=\"{name}\" style=\"background:{}\"><span>{name}</span></a>",
+            if c.wallpaper == id { " selected" } else { "" },
+            escape(background)
+        )
+    };
+    let mut presets = preset_link("", "Keins", "var(--card)");
+    for (id, name, css) in WALLPAPER_PRESETS {
+        presets.push_str(&preset_link(id, name, css));
+    }
+    if wallpaper_path().is_file() {
+        presets.push_str(&preset_link("custom", "Eigenes Bild", "url(poezi://wallpaper) center/cover"));
+    }
+    let wallpaper_rows = [
+        row(
+            "Hintergrund der Startseite",
+            "Klicke auf eine Vorlage oder wähle ein eigenes Bild",
+            format!(
+                "<div class=\"presets\">{presets}</div><p style=\"margin-top:30px\"><a class=\"button\" href=\"poezi://settings?token={token}&amp;wallpaper=pick#hintergrund\">Eigenes Bild wählen …</a></p>"
+            ),
+        ),
+        row("Abdunkeln (%)", "Damit Suchfeld und Kacheln gut lesbar bleiben", format!("<input type=\"number\" min=\"0\" max=\"90\" name=\"wallpaper_dim\" value=\"{}\">", c.wallpaper_dim)),
+        row("Unschärfe (Pixel)", "0 = gestochen scharf", format!("<input type=\"number\" min=\"0\" max=\"40\" name=\"wallpaper_blur\" value=\"{}\">", c.wallpaper_blur)),
+    ];
+    let transports: String = crate::tor::TRANSPORTS
+        .iter()
+        .map(|t| {
+            let found = crate::tor::find_binary(t.binaries).is_some();
+            format!(
+                "{} <span class=\"{}\">{}</span>",
+                t.name,
+                if found { "badge-ok" } else { "muted" },
+                if found { "✓ installiert".to_string() } else { format!("fehlt (Paket {})", t.package) }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("<br>");
+    let tor_installed = crate::tor::find_binary(&["tor"]).is_some();
+    let tor_rows = [
+        row(
+            "Tor",
+            "Tor-Fenster öffnest du über die Seitenleiste, das Menü oder Strg+Umschalt+U",
+            if tor_installed { "<span class=\"badge-ok\">✓ installiert</span>".into() } else { "<span class=\"badge-err\">nicht installiert – sudo pacman -S tor</span>".into() },
+        ),
+        row("JavaScript im Tor-Modus", "Aus ist sicherer, viele Seiten funktionieren dann aber nicht", format!("<input type=\"checkbox\" name=\"tor_javascript\"{}>", checked(c.tor_javascript))),
+        row("Brücken verwenden", "Wenn Tor in deinem Netz blockiert wird", format!("<input type=\"checkbox\" name=\"tor_use_bridges\"{}>", checked(c.tor_use_bridges))),
+        row(
+            "Brücken",
+            "Eine Brücke pro Zeile. Brücken bekommst du auf <a href=\"https://bridges.torproject.org/options\">bridges.torproject.org</a>",
+            format!("<textarea name=\"tor_bridges\" placeholder=\"obfs4 1.2.3.4:443 FINGERPRINT cert=… iat-mode=0\">{}</textarea>", escape(&c.tor_bridges.join("\n"))),
+        ),
+        row("Brückenarten", "Programme für die Brücken (Pluggable Transports)", transports),
+    ];
     let appearance = [
         row(
             "Erscheinungsbild",
@@ -400,6 +580,8 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
             "Wie oft die Leiste neu gezeichnet wird. Die Geschwindigkeit bleibt gleich – mehr heißt glatter und teurer.",
             format!("<input type=\"number\" min=\"1\" max=\"60\" name=\"titlebar_fps\" value=\"{}\">", c.titlebar_fps),
         ),
+        row("Favoritenleiste", "Deine Lesezeichen unter der Adressleiste", format!("<input type=\"checkbox\" name=\"show_favorites\"{}>", checked(c.show_favorites))),
+        row("Seitenleiste links", "Lesezeichen, Verlauf, Downloads, Tor und mehr", format!("<input type=\"checkbox\" name=\"show_sidebar\"{}>", checked(c.show_sidebar))),
     ];
     layout(
         "Einstellungen",
@@ -408,10 +590,14 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
             "<h1>Einstellungen</h1>{notice}<form action=\"poezi://settings\" method=\"get\">\
              <input type=\"hidden\" name=\"token\" value=\"{}\"><input type=\"hidden\" name=\"save\" value=\"1\">\
              <h2>Erscheinungsbild</h2><div class=\"settings\">{}</div>\
+             <h2 id=\"hintergrund\">Hintergrund</h2><div class=\"settings\">{}</div>\
+             <h2 id=\"tor\">Tor-Modus</h2><div class=\"settings\">{}</div>\
              <h2>Browser</h2><div class=\"settings\">{}</div>\
              <p><button type=\"submit\">Speichern</button></p></form>",
             app.token,
             appearance.concat(),
+            wallpaper_rows.concat(),
+            tor_rows.concat(),
             rows.concat()
         ),
     )

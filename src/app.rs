@@ -8,7 +8,8 @@ use gtk::prelude::*;
 use webkit2gtk::{Download, DownloadExt, URIResponseExt, WebContextExt};
 
 use crate::blocker::Blocker;
-use crate::config::{Config, EngineKind, Theme};
+use crate::config::{Config, EngineKind, Mode, Theme};
+use crate::tor::Tor;
 use crate::engine::webkit::{Blocking, PageHandle, WebKitEngine};
 use crate::engine::Page;
 use crate::session::{self, Session, TabState, WindowState};
@@ -22,6 +23,10 @@ pub struct App {
     pub config: RefCell<Config>,
     webkit: RefCell<Option<Rc<WebKitEngine>>>,
     webkit_private: RefCell<Option<Rc<WebKitEngine>>>,
+    webkit_tor: RefCell<Option<Rc<WebKitEngine>>>,
+    pub tor: Rc<Tor>,
+    inactive_since: Cell<Option<std::time::Instant>>,
+    memory_released: Cell<bool>,
     blocker: RefCell<Option<Rc<Blocker>>>,
     pub storage: Storage,
     pub token: String,
@@ -41,6 +46,10 @@ impl App {
             config: RefCell::new(Config::load()),
             webkit: RefCell::new(None),
             webkit_private: RefCell::new(None),
+            webkit_tor: RefCell::new(None),
+            tor: Tor::new(),
+            inactive_since: Cell::new(None),
+            memory_released: Cell::new(false),
             blocker: RefCell::new(None),
             storage: Storage::open(),
             token: random_token(),
@@ -69,6 +78,29 @@ impl App {
         }
     }
 
+    pub fn rc(&self) -> Option<Rc<App>> {
+        self.me.upgrade()
+    }
+
+    pub fn layout_changed(&self) {
+        for window in self.windows.borrow().iter() {
+            window.layout_changed();
+        }
+    }
+
+    pub fn set_layout_option(&self, f: impl FnOnce(&mut Config)) {
+        {
+            let mut config = self.config.borrow_mut();
+            f(&mut config);
+            config.save();
+        }
+        self.layout_changed();
+    }
+
+    pub fn favicon_database(&self) -> Option<webkit2gtk::FaviconDatabase> {
+        self.webkit_engine(Mode::Normal).favicon_database()
+    }
+
     pub fn next_tab_id(&self) -> u64 {
         let id = self.next_tab_id.get();
         self.next_tab_id.set(id + 1);
@@ -87,17 +119,41 @@ impl App {
             *self.blocker.borrow_mut() = Some(blocker);
         }
         self.start_timers();
+        let me = self.me.clone();
+        self.tor.connect_changed(move |status| {
+            if let Some(app) = me.upgrade() {
+                for window in app.windows.borrow().iter().filter(|w| w.mode == Mode::Tor) {
+                    window.tor_status_changed(status);
+                }
+                if status.ready() {
+                    app.reload_pages_starting_with("poezi://tor");
+                }
+            }
+        });
         let app = self.me.clone();
         self.gtk_app.connect_shutdown(move |_| {
             if let Some(app) = app.upgrade() {
                 app.quitting.set(true);
                 app.save_session();
+                app.tor.stop();
             }
         });
     }
 
-    fn webkit_engine(&self, private: bool) -> Rc<WebKitEngine> {
-        let slot = if private { &self.webkit_private } else { &self.webkit };
+    fn engine_slot(&self, mode: Mode) -> &RefCell<Option<Rc<WebKitEngine>>> {
+        match mode {
+            Mode::Normal => &self.webkit,
+            Mode::Private => &self.webkit_private,
+            Mode::Tor => &self.webkit_tor,
+        }
+    }
+
+    pub fn engines(&self) -> Vec<Rc<WebKitEngine>> {
+        [&self.webkit, &self.webkit_private, &self.webkit_tor].iter().filter_map(|s| s.borrow().clone()).collect()
+    }
+
+    fn webkit_engine(&self, mode: Mode) -> Rc<WebKitEngine> {
+        let slot = self.engine_slot(mode);
         if let Some(engine) = slot.borrow().as_ref() {
             return engine.clone();
         }
@@ -106,7 +162,8 @@ impl App {
             Some(app) => pages::handle(uri, &app),
             None => ("text/plain".into(), Vec::new()),
         });
-        let engine = WebKitEngine::new(&self.config.borrow(), private, handler);
+        let engine = WebKitEngine::new(&self.config.borrow(), mode, self.tor.port, handler);
+        let private = mode.is_private();
         engine.set_content_manager_hook(Rc::new(move |ucm| passwords::setup_page(ucm, private)));
         let me = self.me.clone();
         engine.context().connect_download_started(move |_, download| {
@@ -125,20 +182,32 @@ impl App {
         engine
     }
 
-    pub fn create_page(&self, engine: EngineKind, private: bool) -> Box<dyn Page> {
+    pub fn create_page(&self, engine: EngineKind, mode: Mode) -> Box<dyn Page> {
         match engine {
             #[cfg(feature = "servo")]
-            EngineKind::Servo => crate::engine::servo::create_page(&self.config.borrow(), private),
-            _ => Box::new(PageHandle(self.webkit_engine(private).create_page(None))),
+            EngineKind::Servo if mode != Mode::Tor => crate::engine::servo::create_page(&self.config.borrow(), mode.is_private()),
+            _ => Box::new(PageHandle(self.webkit_engine(mode).create_page(None))),
         }
     }
 
-    pub fn new_window(self: &Rc<Self>, private: bool, with_home: bool) -> Rc<BrowserWindow> {
-        let window = BrowserWindow::new(self, private);
+    pub fn homepage(&self, mode: Mode) -> String {
+        match mode {
+            Mode::Tor => "poezi://tor".into(),
+            _ => self.config.borrow().homepage.clone(),
+        }
+    }
+
+    pub fn new_window(self: &Rc<Self>, mode: Mode, with_home: bool) -> Rc<BrowserWindow> {
+        if mode == Mode::Tor {
+            self.tor.start(&self.config.borrow());
+        }
+        let window = BrowserWindow::new(self, mode);
         self.windows.borrow_mut().push(window.clone());
         if with_home {
-            let home = self.config.borrow().homepage.clone();
-            window.open_tab(&home, false);
+            window.open_tab(&self.homepage(mode), false);
+        }
+        if mode == Mode::Tor {
+            window.tor_status_changed(&self.tor.status());
         }
         window.window.present();
         window
@@ -153,6 +222,85 @@ impl App {
             self.save_session();
             self.windows.borrow_mut().retain(|w| !Rc::ptr_eq(w, window));
         }
+        if window.mode != Mode::Normal && !self.windows.borrow().iter().any(|w| w.mode == window.mode) {
+            self.engine_slot(window.mode).borrow_mut().take();
+            if window.mode == Mode::Tor {
+                self.tor.stop();
+            }
+        }
+    }
+
+    pub fn reload_pages_starting_with(&self, prefix: &str) {
+        for window in self.windows.borrow().iter() {
+            window.reload_tabs_starting_with(prefix);
+        }
+    }
+
+    pub fn bookmarks_changed(&self) {
+        for window in self.windows.borrow().iter() {
+            window.bookmarks_changed();
+        }
+    }
+
+    pub fn history_changed(&self) {
+        for window in self.windows.borrow().iter() {
+            window.history_changed();
+        }
+    }
+
+    pub fn pick_wallpaper(self: &Rc<Self>) {
+        let parent = self.last_window().map(|w| w.window.clone());
+        let chooser = gtk::FileChooserNative::new(
+            Some("Hintergrundbild wählen"),
+            parent.as_ref(),
+            gtk::FileChooserAction::Open,
+            Some("Auswählen"),
+            Some("Abbrechen"),
+        );
+        let filter = gtk::FileFilter::new();
+        filter.set_name(Some("Bilder"));
+        filter.add_pixbuf_formats();
+        chooser.add_filter(filter);
+        let me = self.me.clone();
+        chooser.connect_response(move |chooser, response| {
+            if response == gtk::ResponseType::Accept {
+                if let (Some(app), Some(path)) = (me.upgrade(), chooser.filename()) {
+                    app.set_wallpaper_file(&path);
+                }
+            }
+            chooser.destroy();
+        });
+        chooser.show();
+    }
+
+    fn set_wallpaper_file(&self, path: &std::path::Path) {
+        let valid = std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= crate::pages::WALLPAPER_MAX_BYTES)
+            && gtk::gdk_pixbuf::Pixbuf::file_info(path).is_some();
+        if !valid {
+            if let Some(window) = self.last_window() {
+                let dialog = gtk::MessageDialog::new(
+                    Some(&window.window),
+                    gtk::DialogFlags::MODAL,
+                    gtk::MessageType::Warning,
+                    gtk::ButtonsType::Ok,
+                    "Dieses Bild kann nicht verwendet werden.",
+                );
+                dialog.set_secondary_text(Some("Erlaubt sind Bilddateien bis 25 MB (PNG, JPEG, WebP, …)."));
+                dialog.connect_response(|d, _| d.close());
+                dialog.show_all();
+            }
+            return;
+        }
+        let Ok(bytes) = std::fs::read(path) else { return };
+        if crate::config::write_private(&crate::pages::wallpaper_path(), &bytes).is_err() {
+            return;
+        }
+        {
+            let mut config = self.config.borrow_mut();
+            config.wallpaper = "custom".into();
+            config.save();
+        }
+        self.reload_pages_starting_with("poezi://");
     }
 
     fn last_window(&self) -> Option<Rc<BrowserWindow>> {
@@ -160,7 +308,7 @@ impl App {
         let windows = self.windows.borrow();
         active
             .and_then(|a| windows.iter().find(|w| w.window.upcast_ref::<gtk::Window>() == &a).cloned())
-            .or_else(|| windows.iter().rev().find(|w| !w.private).cloned())
+            .or_else(|| windows.iter().rev().find(|w| w.mode == Mode::Normal).cloned())
             .or_else(|| windows.last().cloned())
     }
 
@@ -169,16 +317,26 @@ impl App {
     }
 
     pub fn activate(self: &Rc<Self>) {
-        if self.start_action.take() == Some("new-private-window") && self.windows.borrow().is_empty() {
-            self.new_window(true, true);
-            return;
+        let start = self.start_action.take();
+        if self.windows.borrow().is_empty() {
+            match start {
+                Some("new-private-window") => {
+                    self.new_window(Mode::Private, true);
+                    return;
+                }
+                Some("new-tor-window") => {
+                    self.new_window(Mode::Tor, true);
+                    return;
+                }
+                _ => {}
+            }
         }
         if let Some(window) = self.last_window() {
             window.window.present();
             return;
         }
         if !self.restore_session() {
-            self.new_window(false, true);
+            self.new_window(Mode::Normal, true);
         }
     }
 
@@ -189,7 +347,7 @@ impl App {
                 let restored = self.restore_session();
                 match self.last_window() {
                     Some(w) if restored => w,
-                    _ => self.new_window(false, false),
+                    _ => self.new_window(Mode::Normal, false),
                 }
             }
         };
@@ -253,7 +411,7 @@ impl App {
             return false;
         }
         for state in session.windows {
-            let window = self.new_window(false, false);
+            let window = self.new_window(Mode::Normal, false);
             let active = state.active;
             let mut tabs = Vec::new();
             for tab in state.tabs {
@@ -272,6 +430,24 @@ impl App {
 
     pub fn page_visited(&self, uri: &str, title: &str) {
         self.storage.record_visit(uri, title);
+        self.history_changed();
+    }
+
+    fn release_memory_when_idle(&self) {
+        let active = self.windows.borrow().iter().any(|w| w.window.is_active());
+        if active {
+            self.inactive_since.set(None);
+            self.memory_released.set(false);
+            return;
+        }
+        let since = *self.inactive_since.get().get_or_insert_with(std::time::Instant::now);
+        self.inactive_since.set(Some(since));
+        if !self.memory_released.get() && since.elapsed() >= Duration::from_secs(180) {
+            for engine in self.engines() {
+                engine.release_memory();
+            }
+            self.memory_released.set(true);
+        }
     }
 
     pub fn blocker_rules(&self) -> Option<bool> {
@@ -289,6 +465,9 @@ impl App {
             .iter()
             .flat_map(|w| w.sleep_candidates().into_iter().map(move |t| (w.clone(), t)))
             .min_by_key(|(_, t)| t.last_active.get());
+        for engine in self.engines() {
+            engine.release_memory();
+        }
         if let Some((window, tab)) = candidate {
             window.put_to_sleep(&tab);
         }
@@ -307,6 +486,7 @@ impl App {
             if app.session_dirty.get() {
                 app.save_session();
             }
+            app.release_memory_when_idle();
             glib::ControlFlow::Continue
         });
 
@@ -479,25 +659,53 @@ fn load_css() {
         .private-badge { color: #ffffff; background-color: alpha(#b04bb3, 0.55); border-radius: 999px;
                          padding: 3px 10px; font-weight: 600; font-size: 0.9em; margin: 0 4px; }
 
-        notebook.poezi { background-color: #0b0e14; }
-        notebook.poezi > header { background-color: #0b0e14; background-image: none; border: none;
-                                  box-shadow: inset 0 -1px #1b2130; padding: 5px 6px 0 6px; }
-        notebook.poezi > header > tabs > tab { background: none; color: #8f98a8; border: none; box-shadow: none;
-                                               border-radius: 10px 10px 0 0; padding: 5px 10px; margin: 0 2px;
-                                               min-height: 0; outline: none; transition: background-color 150ms ease, color 150ms ease; }
-        notebook.poezi > header > tabs > tab:hover { background-color: alpha(#ffffff, 0.05); color: #dfe4ec; }
-        notebook.poezi > header > tabs > tab:checked { background-color: #161b26; color: #ffffff;
-                                                       box-shadow: inset 0 2px #13b5b1; }
-        notebook.poezi > header > tabs > tab button { color: inherit; background: none; border: none; box-shadow: none;
-                                                      padding: 0; min-height: 18px; min-width: 18px; border-radius: 999px; }
-        notebook.poezi > header > tabs > tab button:hover { background-color: alpha(#ffffff, 0.12); }
-        notebook.poezi > header > tabs > arrow { color: #8f98a8; background: none; border: none; }
-        notebook.poezi > header button { color: #c7cdd8; background: none; border: none; box-shadow: none; border-radius: 8px; }
-        notebook.poezi > header button:hover { background-color: alpha(#ffffff, 0.10); color: #ffffff; }
-        notebook.poezi > header label.dim-label { color: #9aa3b2; font-size: 0.9em; margin-right: 4px; }
-        notebook.poezi > stack { background-color: #0b0e14; }
+        notebook.poezi, notebook.poezi > stack { background-color: #0b0e14; }
         notebook.poezi > stack label.dim-label { color: #8f98a8; }
         notebook.poezi > stack button { border-radius: 999px; padding: 6px 18px; }
+
+        .favorites-bar { background-color: #0d1118; border-bottom: 1px solid #161c27; padding: 3px 8px; min-height: 30px; }
+        .favorites-bar button.favorite { color: #cfd5df; background: none; border: none; box-shadow: none; border-radius: 8px;
+                                        padding: 3px 9px; min-height: 0; transition: background-color 120ms ease; }
+        .favorites-bar button.favorite:hover { background-color: alpha(#ffffff, 0.08); color: #ffffff; }
+        .favorites-bar button.favorite image { color: #f2c94c; }
+        .favorites-hint { color: #6f7889; font-size: 0.9em; }
+
+        .tab-strip { background-color: #0b0e14; box-shadow: inset 0 -1px #1b2130; padding: 5px 8px 0 8px; }
+        .tab-chip { background: none; color: #8f98a8; border-radius: 10px 10px 0 0; padding: 5px 8px 5px 10px; margin: 0 1px;
+                    transition: background-color 150ms ease, color 150ms ease; }
+        .tab-chip:hover { background-color: alpha(#ffffff, 0.05); color: #dfe4ec; }
+        .tab-chip.active { background-color: #161b26; color: #ffffff; box-shadow: inset 0 2px #13b5b1; }
+        .tab-chip button { color: inherit; background: none; border: none; box-shadow: none; padding: 0;
+                           min-height: 18px; min-width: 18px; border-radius: 999px; }
+        .tab-chip button:hover { background-color: alpha(#ffffff, 0.14); }
+        .tab-strip button.new-tab { color: #c7cdd8; background: none; border: none; box-shadow: none; border-radius: 9px;
+                                    min-height: 26px; min-width: 26px; padding: 2px; margin: 0 0 4px 4px; }
+        .tab-strip button.new-tab:hover { background-color: alpha(#13b5b1, 0.22); color: #ffffff; }
+        .ram-label { color: #9aa3b2; font-size: 0.9em; margin: 0 4px 4px 6px; }
+
+        .sidebar { background-color: #0b0e14; border-right: 1px solid #161c27; padding: 8px 5px; }
+        .sidebar separator { background-color: #1b2130; margin: 4px 6px; min-height: 1px; }
+        button.side-button { color: #aeb6c4; background: none; border: none; box-shadow: none; border-radius: 10px;
+                             min-height: 34px; min-width: 34px; padding: 0; transition: background-color 120ms ease; }
+        button.side-button:hover { background-color: alpha(#ffffff, 0.08); color: #ffffff; }
+        button.side-button:checked { background-color: alpha(#13b5b1, 0.22); color: #ffffff; box-shadow: inset 2px 0 #13b5b1; }
+        .side-panel { background-color: #0f131b; border-right: 1px solid #161c27; padding: 12px 10px; color: #dfe4ec; }
+        .side-panel .panel-title { font-weight: 700; font-size: 1.1em; margin: 0 4px 2px 4px; }
+        .side-panel entry { border-radius: 999px; background-color: #151a24; color: #e8ecf2; border: 1px solid #222a38; box-shadow: none; }
+        .side-panel list, .side-panel scrolledwindow, .side-panel viewport { background-color: transparent; }
+        .side-panel row { background: none; border-radius: 10px; padding: 0; }
+        .side-panel row label { color: #e3e7ee; }
+        .side-panel row label.dim-label { color: #8f98a8; }
+        .side-panel label.dim-label { color: #8f98a8; }
+        .side-panel row:hover { background-color: alpha(#ffffff, 0.05); }
+        .panel-row { padding: 6px 6px 6px 10px; }
+        .panel-row .small { font-size: 0.85em; }
+        .panel-row button { color: #8f98a8; background: none; border: none; box-shadow: none; border-radius: 999px; }
+        .panel-row button:hover { color: #d9485f; background-color: alpha(#ffffff, 0.08); }
+        .side-panel button.destructive-action { border-radius: 999px; }
+        .side-panel progressbar trough { min-height: 4px; border-radius: 999px; }
+        .side-panel progressbar progress { min-height: 4px; border-radius: 999px; background-color: #13b5b1; }
+        .tor-badge { background-color: alpha(#7d4698, 0.75); }
 
         .sleeping { opacity: 0.5; }
         .sleeping label { font-style: italic; }

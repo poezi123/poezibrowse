@@ -119,21 +119,24 @@ impl Blocker {
     pub fn update(self: &Rc<Self>) {
         let me = Rc::downgrade(self);
         glib::MainContext::default().spawn_local(async move {
-            let result = gio::spawn_blocking(build_rules).await;
-            let lists = match result {
-                Ok(Ok(lists)) => lists,
+            let result = gio::spawn_blocking(build_in_child_process).await;
+            match result {
+                Ok(Ok(())) => {}
                 Ok(Err(e)) => {
                     eprintln!("poezibrowse: filter lists not updated: {e}");
                     return;
                 }
                 Err(_) => return,
-            };
+            }
             let Some(me) = me.upgrade() else { return };
             let saved: Rc<RefCell<Vec<Filter>>> = Rc::default();
             let pending = Rc::new(std::cell::Cell::new(IDENTIFIERS.len()));
-            for (id, json) in IDENTIFIERS.into_iter().zip(lists) {
+            for id in IDENTIFIERS {
                 let (me2, saved, pending) = (Rc::downgrade(&me), saved.clone(), pending.clone());
-                me.save(id, json, move |filter| {
+                let file = json_path(id);
+                let done_file = file.clone();
+                me.save_from_file(id, &file, move |filter| {
+                    let _ = std::fs::remove_file(&done_file);
                     saved.borrow_mut().extend(filter);
                     pending.set(pending.get() - 1);
                     if pending.get() > 0 {
@@ -181,7 +184,7 @@ impl Blocker {
         }
     }
 
-    fn save(&self, identifier: &str, json: String, done: impl FnOnce(Option<Filter>) + 'static) {
+    fn save_from_file(&self, identifier: &str, file: &std::path::Path, done: impl FnOnce(Option<Filter>) + 'static) {
         type Cb = Box<dyn FnOnce(Option<Filter>)>;
         unsafe extern "C" fn finished(
             source: *mut glib::gobject_ffi::GObject,
@@ -191,7 +194,7 @@ impl Blocker {
             unsafe {
                 let done: Box<Cb> = Box::from_raw(data as *mut Cb);
                 let mut error = ptr::null_mut();
-                let filter = ffi::webkit_user_content_filter_store_save_finish(source as *mut _, result, &mut error);
+                let filter = ffi::webkit_user_content_filter_store_save_from_file_finish(source as *mut _, result, &mut error);
                 if !error.is_null() {
                     let message = CStr::from_ptr((*error).message).to_string_lossy();
                     eprintln!("poezibrowse: WebKit could not compile the filter list: {message}");
@@ -201,13 +204,13 @@ impl Blocker {
             }
         }
         let id = CString::new(identifier).unwrap();
-        let bytes = glib::Bytes::from_owned(json.into_bytes());
+        let file = gio::File::for_path(file);
         let data: Box<Cb> = Box::new(Box::new(done));
         unsafe {
-            ffi::webkit_user_content_filter_store_save(
+            ffi::webkit_user_content_filter_store_save_from_file(
                 self.store,
                 id.as_ptr(),
-                bytes.to_glib_none().0,
+                file.to_glib_none().0,
                 ptr::null_mut(),
                 Some(finished),
                 Box::into_raw(data) as glib::ffi::gpointer,
@@ -222,6 +225,35 @@ fn is_stale() -> bool {
         .ok()
         .and_then(|t| SystemTime::now().duration_since(t).ok())
         .is_none_or(|age| age > MAX_AGE)
+}
+
+fn json_path(identifier: &str) -> std::path::PathBuf {
+    dir().join(format!("{identifier}.json"))
+}
+
+fn build_in_child_process() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let status = std::process::Command::new(exe)
+        .arg(BUILD_FILTERS_ARG)
+        .stdin(std::process::Stdio::null())
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() { Ok(()) } else { Err(format!("filter builder exited with {status}")) }
+}
+
+pub const BUILD_FILTERS_ARG: &str = "--build-filter-lists";
+
+pub fn build_filter_files() -> bool {
+    let result = build_rules().and_then(|lists| {
+        for (id, json) in IDENTIFIERS.into_iter().zip(lists) {
+            config::write_private(&json_path(id), json.as_bytes()).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    });
+    if let Err(e) = &result {
+        eprintln!("poezibrowse: {e}");
+    }
+    result.is_ok()
 }
 
 fn build_rules() -> Result<[String; 2], String> {

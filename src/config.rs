@@ -61,7 +61,35 @@ pub struct Config {
     pub titlebar_pattern: bool,
     pub titlebar_animation: bool,
     pub titlebar_fps: u32,
+    pub wallpaper: String,
+    pub wallpaper_dim: u32,
+    pub wallpaper_blur: u32,
+    pub show_favorites: bool,
+    pub show_sidebar: bool,
+    pub tor_javascript: bool,
+    pub tor_use_bridges: bool,
+    pub tor_bridges: Vec<String>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Normal,
+    Private,
+    Tor,
+}
+
+impl Mode {
+    pub fn is_private(self) -> bool {
+        self != Mode::Normal
+    }
+}
+
+pub const WALLPAPER_PRESETS: &[(&str, &str, &str)] = &[
+    ("aurora", "Aurora", "radial-gradient(circle at 20% 20%, #0e9c92 0%, transparent 45%), radial-gradient(circle at 80% 30%, #7c42de 0%, transparent 45%), radial-gradient(circle at 50% 90%, #1d3fbf 0%, transparent 55%), #070a14"),
+    ("nacht", "Nachtblau", "linear-gradient(160deg, #02050e 0%, #0b1638 55%, #1a0730 100%)"),
+    ("sonnenuntergang", "Sonnenuntergang", "linear-gradient(170deg, #1b1035 0%, #6a1f5c 45%, #d9485f 75%, #f2a65a 100%)"),
+    ("wald", "Wald", "linear-gradient(160deg, #04140f 0%, #0c3b2e 50%, #1f6f50 100%)"),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -78,7 +106,7 @@ impl Default for Config {
             homepage: "poezi://start".into(),
             search_engine: "duckduckgo".into(),
             engine: EngineKind::Webkit,
-            tab_sleep_minutes: 15,
+            tab_sleep_minutes: 10,
             tabs_per_process: 4,
             memory_limit_mb: 1024,
             ram_budget_mb: 1536,
@@ -94,6 +122,14 @@ impl Default for Config {
             titlebar_pattern: true,
             titlebar_animation: true,
             titlebar_fps: 16,
+            wallpaper: String::new(),
+            wallpaper_dim: 35,
+            wallpaper_blur: 0,
+            show_favorites: true,
+            show_sidebar: true,
+            tor_javascript: true,
+            tor_use_bridges: false,
+            tor_bridges: Vec::new(),
         }
     }
 }
