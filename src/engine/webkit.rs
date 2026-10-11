@@ -89,7 +89,7 @@ impl WebKitEngine {
             let favicons = config::cache_dir().join("favicons");
             context.set_favicon_database_directory(Some(&favicons.to_string_lossy()));
         }
-        if which("bwrap") {
+        if sandbox_usable() {
             context.set_sandbox_enabled(true);
         }
 
@@ -510,6 +510,20 @@ fn handle_permission(view: &WebView, request: &PermissionRequest) -> bool {
     }
     request.deny();
     true
+}
+
+fn sandbox_usable() -> bool {
+    static USABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *USABLE.get_or_init(|| {
+        which("bwrap")
+            && std::process::Command::new("bwrap")
+                .args(["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--unshare-all", "true"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+    })
 }
 
 fn which(program: &str) -> bool {
