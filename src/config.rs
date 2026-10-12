@@ -69,11 +69,40 @@ pub struct Config {
     pub tor_javascript: bool,
     pub tor_use_bridges: bool,
     pub tor_bridges: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tor_bridge_kind: Option<BridgeKind>,
     pub password_manager: String,
     pub pm_database: String,
     pub pm_keyfile: String,
     pub pm_remember: Remember,
     pub ignore_media_warning: bool,
+    pub address_suggestions: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BridgeKind {
+    Obfs4,
+    Snowflake,
+    Meek,
+    Custom,
+}
+
+impl BridgeKind {
+    pub const ALL: [BridgeKind; 4] = [BridgeKind::Obfs4, BridgeKind::Snowflake, BridgeKind::Meek, BridgeKind::Custom];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            BridgeKind::Obfs4 => "obfs4",
+            BridgeKind::Snowflake => "snowflake",
+            BridgeKind::Meek => "meek",
+            BridgeKind::Custom => "custom",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<BridgeKind> {
+        BridgeKind::ALL.into_iter().find(|k| k.id() == id)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -144,16 +173,25 @@ impl Default for Config {
             tor_javascript: true,
             tor_use_bridges: false,
             tor_bridges: Vec::new(),
+            tor_bridge_kind: None,
             password_manager: String::new(),
             pm_database: String::new(),
             pm_keyfile: String::new(),
             pm_remember: Remember::Week,
             ignore_media_warning: false,
+            address_suggestions: false,
         }
     }
 }
 
 impl Config {
+    pub fn bridge_kind(&self) -> Option<BridgeKind> {
+        if !self.tor_use_bridges {
+            return None;
+        }
+        Some(self.tor_bridge_kind.unwrap_or(if self.tor_bridges.is_empty() { BridgeKind::Obfs4 } else { BridgeKind::Custom }))
+    }
+
     pub fn load() -> Config {
         let path = config_dir().join("config.toml");
         let mut config: Config = std::fs::read_to_string(&path)

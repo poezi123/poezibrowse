@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.5.0 – built-in Tor bridges / eingebaute Tor-Brücken
+
+**English**
+
+- **Built-in Tor bridges:** obfs4, Snowflake and meek from Tor Browser 15.0.24, chosen from a menu in the settings with the pros and cons of each. The bridge program `lyrebird` from the Tor Project's signed expert bundle now ships with every package – no extra packages needed on any distribution.
+- **"New circuit" really gets a new circuit:** PoeziBrowse now gives Tor fresh SOCKS credentials, so WebKit drops its open connections and Tor builds a new path with a different middle and exit relay. Before, the old connections were reused and the IP stayed the same.
+- **Circuit view shows the right relays:** a background watcher remembers which circuit each site used; the exit shown now matches the IP the site sees. Relay nicknames are gone – you see country and IP.
+- **Copy image** now puts only the image on the clipboard. Before, the image link came along as text and many apps pasted the link instead of the picture.
+- **Address bar suggestions are off by default** and can be switched on in the settings.
+- Tor settings show the install command for your distribution; Tor restarts by itself when you change the bridge.
+
+**Deutsch**
+
+- **Eingebaute Tor-Brücken:** obfs4, Snowflake und meek aus dem Tor Browser 15.0.24, auswählbar in den Einstellungen, mit Vor- und Nachteilen jeder Brücke. Das Brücken-Programm `lyrebird` aus dem signierten Expert Bundle des Tor-Projekts ist jetzt in jedem Paket – auf keiner Distribution braucht es Zusatzpakete.
+- **„Neue Verbindung“ holt wirklich eine neue:** PoeziBrowse gibt Tor neue SOCKS-Zugangsdaten, dadurch verwirft WebKit seine offenen Verbindungen und Tor baut einen neuen Weg mit anderer Mitte und anderem Ausgang. Vorher wurden die alten Verbindungen weiterbenutzt und die IP blieb gleich.
+- **Die Anzeige zeigt die richtigen Knoten:** Ein Wächter im Hintergrund merkt sich, über welche Verbindung jede Seite lief; der angezeigte Ausgang passt jetzt zur IP, die die Seite sieht. Statt der Spitznamen der Knoten siehst du Land und IP.
+- **Bild kopieren** legt jetzt nur das Bild in die Zwischenablage. Vorher kam der Bildlink als Text mit, und viele Programme haben den Link statt des Bildes eingefügt.
+- **Vorschläge in der Adressleiste sind standardmäßig aus** und lassen sich in den Einstellungen einschalten.
+- Die Tor-Einstellungen zeigen den Installationsbefehl für deine Distribution; Tor startet neu, wenn du die Brücke wechselst.
+
 ## v0.4.2 – no more tearing on NVIDIA / keine Bildfehler mehr mit NVIDIA
 
 **English**

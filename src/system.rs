@@ -150,6 +150,16 @@ pub fn media_install_command() -> &'static str {
     }
 }
 
+pub fn tor_install_command() -> &'static str {
+    match family() {
+        Family::Arch => "sudo pacman -S tor",
+        Family::Debian => "sudo apt install tor",
+        Family::Fedora => "sudo dnf install tor",
+        Family::Suse => "sudo zypper install tor",
+        Family::Other => "Paket „tor“ installieren",
+    }
+}
+
 pub fn tls_install_command() -> &'static str {
     match family() {
         Family::Arch => "sudo pacman -S glib-networking",

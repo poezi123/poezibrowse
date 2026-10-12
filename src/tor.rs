@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use gtk::glib;
 
-use crate::config::{self, Config};
+use crate::config::{self, BridgeKind, Config};
 
 #[derive(Clone, Default)]
 pub struct Status {
@@ -40,14 +40,13 @@ impl Status {
 pub struct Transport {
     pub name: &'static str,
     pub binaries: &'static [&'static str],
-    pub package: &'static str,
 }
 
 pub const TRANSPORTS: &[Transport] = &[
-    Transport { name: "obfs4", binaries: &["lyrebird", "obfs4proxy"], package: "lyrebird-proxy" },
-    Transport { name: "webtunnel", binaries: &["lyrebird", "webtunnel-client"], package: "lyrebird-proxy" },
-    Transport { name: "meek_lite", binaries: &["lyrebird", "obfs4proxy"], package: "lyrebird-proxy" },
-    Transport { name: "snowflake", binaries: &["snowflake-client"], package: "snowflake-pt-client-git" },
+    Transport { name: "obfs4", binaries: &["lyrebird", "obfs4proxy"] },
+    Transport { name: "webtunnel", binaries: &["lyrebird", "webtunnel-client"] },
+    Transport { name: "meek_lite", binaries: &["lyrebird", "obfs4proxy"] },
+    Transport { name: "snowflake", binaries: &["lyrebird", "snowflake-client"] },
 ];
 
 pub fn find_binary(names: &[&str]) -> Option<PathBuf> {
@@ -56,6 +55,37 @@ pub fn find_binary(names: &[&str]) -> Option<PathBuf> {
         .iter()
         .flat_map(|name| std::env::split_paths(&paths).map(move |dir| dir.join(name)))
         .find(|p| p.is_file())
+}
+
+pub fn bundled_lyrebird() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let prefix = exe.parent()?.parent()?;
+    ["lib/poezibrowse/lyrebird", "lib64/poezibrowse/lyrebird", "libexec/poezibrowse/lyrebird"]
+        .iter()
+        .map(|p| prefix.join(p))
+        .find(|p| p.is_file())
+}
+
+pub fn transport_binary(transport: &Transport) -> Option<PathBuf> {
+    bundled_lyrebird().or_else(|| find_binary(transport.binaries))
+}
+
+const BUILTIN: &str = include_str!("../assets/tor/bridges.json");
+
+pub fn builtin_bridges(kind: BridgeKind) -> Vec<String> {
+    let key = match kind {
+        BridgeKind::Obfs4 => "obfs4",
+        BridgeKind::Snowflake => "snowflake",
+        BridgeKind::Meek => "meek",
+        BridgeKind::Custom => return Vec::new(),
+    };
+    serde_json::from_str::<serde_json::Value>(BUILTIN)
+        .ok()
+        .and_then(|v| v.get("bridges")?.get(key)?.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|l| l.as_str().map(String::from))
+        .collect()
 }
 
 fn bridge_transport(line: &str) -> Option<&str> {
@@ -95,10 +125,13 @@ pub fn torrc(config: &Config, port: u16, data_dir: &std::path::Path) -> Result<S
         control_socket().display(),
         control_cookie().display()
     );
-    if config.tor_use_bridges {
-        let bridges = clean_bridges(&config.tor_bridges);
+    if let Some(kind) = config.bridge_kind() {
+        let bridges = match kind {
+            BridgeKind::Custom => clean_bridges(&config.tor_bridges),
+            builtin => builtin_bridges(builtin),
+        };
         if bridges.is_empty() {
-            return Err("Brücken sind eingeschaltet, aber es ist keine Brücke eingetragen.".into());
+            return Err("Eigene Brücken sind ausgewählt, aber es ist keine Brücke eingetragen.".into());
         }
         rc.push_str("UseBridges 1\n");
         let mut needed: Vec<&str> = bridges.iter().filter_map(|b| bridge_transport(b)).collect();
@@ -109,8 +142,8 @@ pub fn torrc(config: &Config, port: u16, data_dir: &std::path::Path) -> Result<S
                 .iter()
                 .find(|t| t.name == name)
                 .ok_or_else(|| format!("Die Brückenart „{name}“ wird nicht unterstützt."))?;
-            let binary = find_binary(transport.binaries).ok_or_else(|| {
-                format!("Für {name}-Brücken fehlt das Programm {} (Paket {}).", transport.binaries[0], transport.package)
+            let binary = transport_binary(transport).ok_or_else(|| {
+                format!("Für {name}-Brücken fehlt das Programm lyrebird. Es ist in den PoeziBrowse-Paketen enthalten – bitte PoeziBrowse neu installieren.")
             })?;
             rc.push_str(&format!("ClientTransportPlugin {name} exec {}\n", binary.display()));
         }
@@ -126,6 +159,7 @@ pub struct Tor {
     child: RefCell<Option<Child>>,
     status: RefCell<Status>,
     listeners: RefCell<Vec<Box<dyn Fn(&Status)>>>,
+    watching: std::cell::Cell<bool>,
 }
 
 impl Tor {
@@ -134,7 +168,7 @@ impl Tor {
             .and_then(|l| l.local_addr())
             .map(|a| a.port())
             .unwrap_or(19150);
-        Rc::new(Tor { port, child: RefCell::new(None), status: RefCell::new(Status::default()), listeners: RefCell::new(Vec::new()) })
+        Rc::new(Tor { port, child: RefCell::new(None), status: RefCell::new(Status::default()), listeners: RefCell::new(Vec::new()), watching: std::cell::Cell::new(false) })
     }
 
     pub fn status(&self) -> Status {
@@ -162,7 +196,7 @@ impl Tor {
         }
         let fail = |message: String| Status { error: Some(message), ..Status::default() };
         let Some(binary) = find_binary(&["tor"]) else {
-            self.set_status(fail("Tor ist nicht installiert (Paket „tor“).".into()));
+            self.set_status(fail(format!("Tor ist nicht installiert – {}", crate::system::tor_install_command())));
             return;
         };
         let dir = config::data_dir().join("tor");
@@ -245,6 +279,9 @@ impl Tor {
                 return glib::ControlFlow::Break;
             }
             if changed {
+                if status.ready() && !me.watching.replace(true) {
+                    watch_streams();
+                }
                 me.set_status(status);
             }
             glib::ControlFlow::Continue
@@ -252,6 +289,7 @@ impl Tor {
     }
 
     pub fn stop(&self) {
+        self.watching.set(false);
         if let Some(mut child) = self.child.borrow_mut().take() {
             let _ = child.kill();
             let _ = child.wait();
@@ -273,7 +311,6 @@ impl Drop for Tor {
 
 pub struct Relay {
     pub role: String,
-    pub nickname: String,
     pub fingerprint: String,
     pub ip: Option<String>,
     pub country: Option<String>,
@@ -347,6 +384,58 @@ impl Control {
     }
 }
 
+static STREAM_CIRCUITS: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+fn remember_stream(host: &str, circuit: &str) {
+    if let Ok(mut map) = STREAM_CIRCUITS.lock() {
+        map.retain(|(h, _)| h != host);
+        map.push((host.to_string(), circuit.to_string()));
+        if map.len() > 300 {
+            map.remove(0);
+        }
+    }
+}
+
+fn remembered_circuit(host: &str) -> Option<String> {
+    STREAM_CIRCUITS.lock().ok()?.iter().rev().find(|(h, _)| h == host).map(|(_, c)| c.clone())
+}
+
+fn parse_stream_event(line: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.first() != Some(&"650") || parts.get(1) != Some(&"STREAM") {
+        return None;
+    }
+    if !matches!(parts.get(3), Some(&"SENTCONNECT") | Some(&"SUCCEEDED")) {
+        return None;
+    }
+    let circuit = parts.get(4).filter(|c| **c != "0")?;
+    let target = parts.get(5)?;
+    let host = target.rsplit_once(':').map_or(*target, |(h, _)| h);
+    Some((host.to_string(), circuit.to_string()))
+}
+
+fn watch_streams() {
+    std::thread::spawn(|| {
+        let Ok(mut control) = Control::connect() else { return };
+        if control.command("SETEVENTS STREAM").is_err() {
+            return;
+        }
+        loop {
+            let mut line = String::new();
+            match control.reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if let Some((host, circuit)) = parse_stream_event(line.trim_end()) {
+                        remember_stream(&host, &circuit);
+                    }
+                }
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => continue,
+                Err(_) => break,
+            }
+        }
+    });
+}
+
 pub fn circuit_for(host: &str) -> Result<Vec<Relay>, String> {
     let mut control = Control::connect()?;
     let streams = control.info("stream-status")?;
@@ -356,26 +445,25 @@ pub fn circuit_for(host: &str) -> Result<Vec<Relay>, String> {
         let target_host = target.rsplit_once(':').map_or(*target, |(h, _)| h);
         (target_host == host).then(|| parts.get(2).map(|c| c.to_string())).flatten()
     });
+    let wanted = wanted.or_else(|| remembered_circuit(host));
     let circuits = control.info("circuit-status")?;
     let built: Vec<Vec<&str>> = circuits.iter().map(|l| l.split_whitespace().collect::<Vec<_>>()).filter(|p| p.get(1) == Some(&"BUILT")).collect();
     let circuit = wanted
         .and_then(|id| built.iter().find(|p| p[0] == id))
-        .or_else(|| built.iter().rev().find(|p| p.iter().any(|f| *f == "PURPOSE=GENERAL")))
-        .ok_or("Noch keine fertige Tor-Verbindung")?;
-    let path: Vec<(String, String)> = circuit
+        .ok_or("Für diese Seite gibt es gerade keine offene Tor-Verbindung. Lade die Seite neu und öffne die Anzeige dann noch einmal.")?;
+    let path: Vec<String> = circuit
         .get(2)
         .unwrap_or(&"")
         .split(',')
         .filter(|h| !h.is_empty())
         .map(|hop| {
             let hop = hop.trim_start_matches('$');
-            let (fp, nick) = hop.split_once(['~', '=']).unwrap_or((hop, ""));
-            (fp.to_string(), nick.to_string())
+            hop.split_once(['~', '=']).map_or(hop, |(fp, _)| fp).to_string()
         })
         .collect();
     let count = path.len();
     let mut relays = Vec::new();
-    for (i, (fingerprint, nickname)) in path.into_iter().enumerate() {
+    for (i, fingerprint) in path.into_iter().enumerate() {
         let role = match (i, count) {
             (0, _) => "Eingang (Guard)".to_string(),
             (i, 3) if i == 2 => "Ausgang (Exit)".to_string(),
@@ -395,14 +483,9 @@ pub fn circuit_for(host: &str) -> Result<Vec<Relay>, String> {
                 .next()
                 .filter(|c| c.len() == 2 && c != "??")
         });
-        relays.push(Relay { role, nickname, fingerprint, ip, country });
+        relays.push(Relay { role, fingerprint, ip, country });
     }
     Ok(relays)
-}
-
-pub fn new_identity() -> Result<(), String> {
-    let mut control = Control::connect()?;
-    control.command("SIGNAL NEWNYM").map(|_| ())
 }
 
 #[cfg(test)]
@@ -422,6 +505,37 @@ mod tests {
         assert_eq!(bridge_transport(&clean[0]), Some("obfs4"));
         assert_eq!(bridge_transport(&clean[1]), None);
         assert_eq!(bridge_transport("[2001:db8::1]:443 FP"), None);
+    }
+
+    #[test]
+    fn builtin() {
+        for kind in [BridgeKind::Obfs4, BridgeKind::Snowflake, BridgeKind::Meek] {
+            let bridges = builtin_bridges(kind);
+            assert!(!bridges.is_empty());
+            assert!(clean_bridges(&bridges).len() == bridges.len());
+        }
+        assert!(builtin_bridges(BridgeKind::Obfs4).iter().all(|b| b.starts_with("obfs4 ")));
+        assert!(builtin_bridges(BridgeKind::Custom).is_empty());
+    }
+
+    #[test]
+    fn bridge_kind_migration() {
+        let off = Config::default();
+        assert_eq!(off.bridge_kind(), None);
+        let old = Config { tor_use_bridges: true, tor_bridges: vec!["obfs4 1.2.3.4:1 FP cert=x iat-mode=0".into()], ..Config::default() };
+        assert_eq!(old.bridge_kind(), Some(BridgeKind::Custom));
+        let fresh = Config { tor_use_bridges: true, ..Config::default() };
+        assert_eq!(fresh.bridge_kind(), Some(BridgeKind::Obfs4));
+    }
+
+    #[test]
+    fn stream_events() {
+        assert_eq!(
+            parse_stream_event("650 STREAM 42 SUCCEEDED 17 check.torproject.org:443 SOURCE_ADDR=127.0.0.1:5555 PURPOSE=USER"),
+            Some(("check.torproject.org".into(), "17".into()))
+        );
+        assert_eq!(parse_stream_event("650 STREAM 42 NEW 0 example.com:443"), None);
+        assert_eq!(parse_stream_event("650 CIRC 17 BUILT"), None);
     }
 
     #[test]

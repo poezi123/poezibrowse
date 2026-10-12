@@ -1189,6 +1189,9 @@ impl BrowserWindow {
 
     fn fill_suggestions(&self, text: &str) {
         self.suggestions.clear();
+        if !self.app.config.borrow().address_suggestions {
+            return;
+        }
         let text = text.trim();
         if text.is_empty() {
             return;
@@ -1533,7 +1536,7 @@ impl BrowserWindow {
         spinner.start();
         body.pack_start(&spinner, false, false, 6);
         bx.pack_start(&body, false, false, 0);
-        let renew = gtk::Button::with_label("Neue Verbindung für diese Seite");
+        let renew = gtk::Button::with_label("Neue Verbindung");
         renew.style_context().add_class("suggested-action");
         bx.pack_start(&renew, false, false, 4);
         popover.add(&bx);
@@ -1552,31 +1555,41 @@ impl BrowserWindow {
                         grid.set_column_spacing(14);
                         grid.set_row_spacing(10);
                         for (row, relay) in relays.iter().enumerate() {
-                            let role = gtk::Label::new(Some(&relay.role));
+                            let bridge = row == 0 && relay.ip.is_none();
+                            let role = gtk::Label::new(Some(if bridge { "Eingang (Brücke)" } else { &relay.role }));
                             role.set_xalign(0.0);
                             role.style_context().add_class("dim-label");
                             let flag = gtk::Label::new(Some(&relay.country.as_deref().map(crate::tor::flag).unwrap_or_else(|| "🌐".into())));
                             flag.style_context().add_class("circuit-flag");
-                            let name = if relay.nickname.is_empty() { relay.fingerprint.chars().take(12).collect() } else { relay.nickname.clone() };
-                            let details = format!(
-                                "{}{}",
-                                relay.ip.clone().unwrap_or_else(|| "Brücke / unbekannte IP".into()),
-                                relay.country.as_deref().map(|c| format!(" · {}", c.to_uppercase())).unwrap_or_default()
-                            );
+                            let place = match relay.country.as_deref() {
+                                Some(code) => crate::countries::name(code).map(String::from).unwrap_or_else(|| code.to_uppercase()),
+                                None if bridge => "Deine Brücke".into(),
+                                None => "Land unbekannt".into(),
+                            };
                             let text = gtk::Box::new(Orientation::Vertical, 1);
-                            let name_label = gtk::Label::new(Some(&name));
-                            name_label.set_xalign(0.0);
-                            let details_label = gtk::Label::new(Some(&details));
-                            details_label.set_xalign(0.0);
-                            details_label.style_context().add_class("dim-label");
-                            details_label.set_selectable(true);
-                            text.pack_start(&name_label, false, false, 0);
-                            text.pack_start(&details_label, false, false, 0);
-                            text.set_tooltip_text(Some(&relay.fingerprint));
+                            let place_label = gtk::Label::new(Some(&place));
+                            place_label.set_xalign(0.0);
+                            text.pack_start(&place_label, false, false, 0);
+                            if let Some(ip) = &relay.ip {
+                                let ip_label = gtk::Label::new(Some(ip));
+                                ip_label.set_xalign(0.0);
+                                ip_label.style_context().add_class("dim-label");
+                                ip_label.set_selectable(true);
+                                text.pack_start(&ip_label, false, false, 0);
+                            }
+                            text.set_tooltip_text(Some(&format!("Fingerabdruck: {}", relay.fingerprint)));
                             grid.attach(&role, 0, row as i32, 1, 1);
                             grid.attach(&flag, 1, row as i32, 1, 1);
                             grid.attach(&text, 2, row as i32, 1, 1);
                         }
+                        let note = gtk::Label::new(Some(
+                            "Tor benutzt mit Absicht nur wenige feste Eingangsknoten – das schützt dich vor bösartigen Knoten. Mitte und Ausgang wechseln bei jeder neuen Verbindung.",
+                        ));
+                        note.set_line_wrap(true);
+                        note.set_max_width_chars(42);
+                        note.set_xalign(0.0);
+                        note.style_context().add_class("dim-label");
+                        grid.attach(&note, 0, relays.len() as i32, 3, 1);
                         body.pack_start(&grid, false, false, 0);
                     }
                     Err(e) => {
@@ -1600,12 +1613,10 @@ impl BrowserWindow {
         renew.connect_clicked(move |_| {
             let w = w.clone();
             let p = p.clone();
-            glib::MainContext::default().spawn_local(async move {
-                let result = gio::spawn_blocking(crate::tor::new_identity).await.unwrap_or_else(|_| Err("Fehler".into()));
-                p.popdown();
-                if result.is_ok() {
-                    with(&w, |w| w.with_page(|page| page.reload(true)));
-                }
+            p.popdown();
+            with(&w, |w| {
+                w.app.new_tor_circuits();
+                w.with_page(|page| page.reload(true));
             });
         });
     }

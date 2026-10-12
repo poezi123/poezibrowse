@@ -1,6 +1,6 @@
 
 pkgname=poezibrowse
-pkgver=0.4.2
+pkgver=0.5.0
 pkgrel=1
 pkgdesc='Schlanker Webbrowser für Linux, geschrieben in Rust'
 arch=('x86_64')
@@ -12,11 +12,11 @@ makedepends=('cargo' 'pkgconf')
 optdepends=('xdg-dbus-proxy: Sandbox für Webseiten-Prozesse'
             'tor: Tor-Modus'
             'keepassxc: Logins in einer KeePassXC-Datenbank speichern'
-            'gst-plugin-dav1d: schnelle AV1-Videodekodierung'
-
-            'lyrebird-proxy: Tor-Brücken obfs4, webtunnel und meek'
-            'snowflake-pt-client-git: Tor-Brücke Snowflake')
+            'gst-plugin-dav1d: schnelle AV1-Videodekodierung')
 options=('!lto' '!debug')
+_tebver=15.0.24
+source=("https://dist.torproject.org/torbrowser/${_tebver}/tor-expert-bundle-linux-x86_64-${_tebver}.tar.gz")
+sha256sums=('8e012ec6815d7899cb64011582e2dade88e74119c6661068a2a3252de0ccd7f2')
 
 _appid='io.github.poezi123.PoeziBrowse'
 
@@ -62,4 +62,6 @@ package() {
   done
   install -Dm644 packaging/linux/icon.svg "${pkgdir}/usr/share/icons/hicolor/scalable/apps/${_appid}.svg"
   install -Dm644 LICENSE -t "${pkgdir}/usr/share/licenses/${pkgname}"
+  install -Dm755 "${srcdir}/tor/pluggable_transports/lyrebird" "${pkgdir}/usr/lib/poezibrowse/lyrebird"
+  install -Dm644 "${srcdir}/docs/lyrebird.txt" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.lyrebird"
 }

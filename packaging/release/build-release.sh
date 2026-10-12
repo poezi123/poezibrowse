@@ -13,6 +13,7 @@ mkdir -p "$target"
 target="$(cd "$target" && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
+"$root/packaging/tor/fetch-lyrebird.sh" "$work/lyrebird"
 
 stage() {
   local dest="$1"
@@ -22,11 +23,13 @@ stage() {
     install -Dm644 "$root/packaging/linux/icons/$size.png" "$dest/usr/share/icons/hicolor/${size}x${size}/apps/$appid.png"
   done
   install -Dm644 "$root/packaging/linux/icon.svg" "$dest/usr/share/icons/hicolor/scalable/apps/$appid.svg"
+  install -Dm755 "$work/lyrebird/lyrebird" "$dest/usr/lib/poezibrowse/lyrebird"
 }
 
 deb="$work/deb"
 stage "$deb"
 install -Dm644 "$root/LICENSE" "$deb/usr/share/doc/poezibrowse/copyright"
+install -Dm644 "$work/lyrebird/LICENSE.lyrebird" "$deb/usr/share/doc/poezibrowse/LICENSE.lyrebird"
 find "$deb" -type d -exec chmod 755 {} +
 install -d "$deb/DEBIAN"
 cat > "$deb/DEBIAN/control" <<CONTROL
@@ -36,8 +39,8 @@ Architecture: amd64
 Maintainer: poezi123 <poezi123@users.noreply.github.com>
 Installed-Size: $(du -sk --exclude=DEBIAN "$deb" | cut -f1)
 Depends: libc6 (>= 2.39), libwebkit2gtk-4.1-0 (>= 2.40), libgtk-3-0t64 | libgtk-3-0, libsqlite3-0, libglib2.0-0t64 | libglib2.0-0, glib-networking, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-libav
-Recommends: bubblewrap, xdg-dbus-proxy, gstreamer1.0-plugins-bad
-Suggests: tor, keepassxc, obfs4proxy
+Recommends: bubblewrap, xdg-dbus-proxy, gstreamer1.0-plugins-bad, tor
+Suggests: tor, keepassxc
 Section: web
 Priority: optional
 Homepage: https://github.com/poezi123/poezibrowse
@@ -51,6 +54,7 @@ dpkg-deb --root-owner-group --build "$deb" "$target/poezibrowse_${version}_amd64
 tarroot="$work/poezibrowse-$version-linux-x64"
 stage "$tarroot"
 install -Dm644 "$root/LICENSE" "$tarroot/LICENSE"
+install -Dm644 "$work/lyrebird/LICENSE.lyrebird" "$tarroot/LICENSE.lyrebird"
 install -Dm755 "$root/packaging/release/install.sh" "$tarroot/install.sh"
 install -Dm755 "$root/packaging/release/uninstall.sh" "$tarroot/uninstall.sh"
 tar -C "$work" --owner=0 --group=0 -czf "$target/poezibrowse-$version-linux-x64.tar.gz" "poezibrowse-$version-linux-x64"

@@ -48,9 +48,9 @@ The interface is in German for now.
 
 | System | Package | |
 |---|---|---|
-| **Arch Linux**, Garuda, CachyOS, Manjaro, EndeavourOS | `poezibrowse-0.4.2-1-x86_64.pkg.tar.zst` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.4.2/poezibrowse-0.4.2-1-x86_64.pkg.tar.zst) |
-| **Ubuntu 24.04+**, Debian 13, Linux Mint 22 | `poezibrowse_0.4.2_amd64.deb` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.4.2/poezibrowse_0.4.2_amd64.deb) |
-| **Any other Linux** (Fedora, openSUSE, …) | `poezibrowse-0.4.2-linux-x64.tar.gz` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.4.2/poezibrowse-0.4.2-linux-x64.tar.gz) |
+| **Arch Linux**, Garuda, CachyOS, Manjaro, EndeavourOS | `poezibrowse-0.5.0-1-x86_64.pkg.tar.zst` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.0/poezibrowse-0.5.0-1-x86_64.pkg.tar.zst) |
+| **Ubuntu 24.04+**, Debian 13, Linux Mint 22 | `poezibrowse_0.5.0_amd64.deb` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.0/poezibrowse_0.5.0_amd64.deb) |
+| **Any other Linux** (Fedora, openSUSE, …) | `poezibrowse-0.5.0-linux-x64.tar.gz` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.0/poezibrowse-0.5.0-linux-x64.tar.gz) |
 
 All versions and checksums (`SHA256SUMS.txt`) are on the
 [releases page](https://github.com/poezi123/poezibrowse/releases).
@@ -65,25 +65,25 @@ that means Ubuntu 24.04, Debian 13, Fedora 40 or any current Arch-based system.
 **Arch Linux and derivatives**
 
 ```sh
-sudo pacman -U poezibrowse-0.4.2-1-x86_64.pkg.tar.zst
+sudo pacman -U poezibrowse-0.5.0-1-x86_64.pkg.tar.zst
 ```
 
 **Ubuntu, Debian, Linux Mint** – double-click the file, or:
 
 ```sh
-sudo apt install ./poezibrowse_0.4.2_amd64.deb
+sudo apt install ./poezibrowse_0.5.0_amd64.deb
 ```
 
 **Any other distribution** – install WebKitGTK 4.1 with your package manager first, then (no root needed):
 
 ```sh
-tar xzf poezibrowse-0.4.2-linux-x64.tar.gz
-cd poezibrowse-0.4.2-linux-x64
+tar xzf poezibrowse-0.5.0-linux-x64.tar.gz
+cd poezibrowse-0.5.0-linux-x64
 ./install.sh        # adds PoeziBrowse to your app menu (~/.local)
 ```
 
 **Optional extras:** `tor` for Tor tabs, `keepassxc` to save logins into a KeePassXC database,
-`gst-plugin-dav1d` (Arch) for fast AV1 video, `lyrebird` or `snowflake-client` for Tor bridges.
+`gst-plugin-dav1d` (Arch) for fast AV1 video. The bridge program `lyrebird` from the Tor Project is included.
 
 **Check the download** (optional):
 
@@ -103,7 +103,7 @@ sha256sum -c SHA256SUMS.txt --ignore-missing
 - Tabs with drag and drop, the **+** right next to the last tab, mouse wheel switches tabs
 - Favorites bar, favorites on the start page, rename them with a right click
 - Sidebar with panels for bookmarks, history and downloads
-- Address bar suggestions from favorites and history, search with DuckDuckGo, Startpage, Brave, Ecosia, Qwant or Google
+- Optional address bar suggestions from favorites and history, search with DuckDuckGo, Startpage, Brave, Ecosia, Qwant or Google
 - Session restore – restored tabs only load when you open them
 - Ctrl + mouse wheel zoom, mouse back/forward buttons, find in page, print, developer tools
 - Built-in PDF viewer (PDF.js) – PDFs open in a tab, also from the file manager
@@ -124,8 +124,8 @@ sha256sum -c SHA256SUMS.txt --ignore-missing
 </p>
 
 - Open a Tor tab with the onion in the sidebar or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>U</kbd>; PoeziBrowse starts its own Tor process
-- Bridges: obfs4, webtunnel, meek and Snowflake
-- The onion button shows the circuit of the current site – entry, middle and exit relay with country and IP – and gets you a new circuit
+- Built-in bridges from Tor Browser (obfs4, Snowflake, meek) – choose one in the settings, pros and cons are listed right there; your own bridges (incl. webtunnel) work too
+- The onion button shows the circuit of the current site – entry, middle and exit relay with country and IP – and gets you a new one with a fresh middle and exit relay
 - DNS is resolved by Tor; WebRTC and WebGL are off, the time zone is UTC
 - Separate Tor favorites; searches go to the DuckDuckGo onion service
 - Links opened from a Tor tab stay in Tor tabs

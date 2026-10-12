@@ -46,9 +46,9 @@ Telemetrie, nichts läuft im Hintergrund.
 
 | System | Paket | |
 |---|---|---|
-| **Arch Linux**, Garuda, CachyOS, Manjaro, EndeavourOS | `poezibrowse-0.4.2-1-x86_64.pkg.tar.zst` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.4.2/poezibrowse-0.4.2-1-x86_64.pkg.tar.zst) |
-| **Ubuntu 24.04+**, Debian 13, Linux Mint 22 | `poezibrowse_0.4.2_amd64.deb` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.4.2/poezibrowse_0.4.2_amd64.deb) |
-| **Jedes andere Linux** (Fedora, openSUSE, …) | `poezibrowse-0.4.2-linux-x64.tar.gz` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.4.2/poezibrowse-0.4.2-linux-x64.tar.gz) |
+| **Arch Linux**, Garuda, CachyOS, Manjaro, EndeavourOS | `poezibrowse-0.5.0-1-x86_64.pkg.tar.zst` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.0/poezibrowse-0.5.0-1-x86_64.pkg.tar.zst) |
+| **Ubuntu 24.04+**, Debian 13, Linux Mint 22 | `poezibrowse_0.5.0_amd64.deb` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.0/poezibrowse_0.5.0_amd64.deb) |
+| **Jedes andere Linux** (Fedora, openSUSE, …) | `poezibrowse-0.5.0-linux-x64.tar.gz` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.0/poezibrowse-0.5.0-linux-x64.tar.gz) |
 
 Alle Versionen und Prüfsummen (`SHA256SUMS.txt`) stehen auf der
 [Release-Seite](https://github.com/poezi123/poezibrowse/releases).
@@ -63,25 +63,25 @@ also Ubuntu 24.04, Debian 13, Fedora 40 oder jedes aktuelle Arch-basierte System
 **Arch Linux und Ableger**
 
 ```sh
-sudo pacman -U poezibrowse-0.4.2-1-x86_64.pkg.tar.zst
+sudo pacman -U poezibrowse-0.5.0-1-x86_64.pkg.tar.zst
 ```
 
 **Ubuntu, Debian, Linux Mint** – Datei doppelklicken oder:
 
 ```sh
-sudo apt install ./poezibrowse_0.4.2_amd64.deb
+sudo apt install ./poezibrowse_0.5.0_amd64.deb
 ```
 
 **Jede andere Distribution** – zuerst WebKitGTK 4.1 über die Paketverwaltung installieren, dann (ohne Root-Rechte):
 
 ```sh
-tar xzf poezibrowse-0.4.2-linux-x64.tar.gz
-cd poezibrowse-0.4.2-linux-x64
+tar xzf poezibrowse-0.5.0-linux-x64.tar.gz
+cd poezibrowse-0.5.0-linux-x64
 ./install.sh        # trägt PoeziBrowse ins Startmenü ein (~/.local)
 ```
 
 **Optional:** `tor` für Tor-Tabs, `keepassxc` zum Speichern von Logins in einer KeePassXC-Datenbank,
-`gst-plugin-dav1d` (Arch) für schnelle AV1-Videos, `lyrebird` oder `snowflake-client` für Tor-Brücken.
+`gst-plugin-dav1d` (Arch) für schnelle AV1-Videos. Das Brücken-Programm `lyrebird` des Tor-Projekts ist dabei.
 
 **Download prüfen** (optional):
 
@@ -101,7 +101,7 @@ sha256sum -c SHA256SUMS.txt --ignore-missing
 - Tabs mit Drag & Drop, das **+** direkt neben dem letzten Tab, Mausrad wechselt die Tabs
 - Favoritenleiste, Favoriten auf der Startseite, umbenennen per Rechtsklick
 - Seitenleiste mit Lesezeichen, Verlauf und Downloads
-- Vorschläge in der Adressleiste aus Favoriten und Verlauf, Suche mit DuckDuckGo, Startpage, Brave, Ecosia, Qwant oder Google
+- Wahlweise Vorschläge in der Adressleiste aus Favoriten und Verlauf, Suche mit DuckDuckGo, Startpage, Brave, Ecosia, Qwant oder Google
 - Sitzung wiederherstellen – wiederhergestellte Tabs laden erst, wenn du sie öffnest
 - Zoom mit Strg + Mausrad, Zurück/Vor mit den Daumentasten der Maus, Suchen auf der Seite, Drucken, Entwicklerwerkzeuge
 - Eingebauter PDF-Betrachter (PDF.js) – PDFs öffnen sich im Tab, auch aus dem Dateimanager
@@ -122,8 +122,8 @@ sha256sum -c SHA256SUMS.txt --ignore-missing
 </p>
 
 - Tor-Tab über die Zwiebel in der Seitenleiste oder <kbd>Strg</kbd>+<kbd>Umschalt</kbd>+<kbd>U</kbd>; PoeziBrowse startet seinen eigenen Tor-Prozess
-- Brücken: obfs4, webtunnel, meek und Snowflake
-- Der Zwiebel-Button zeigt die Verbindung der aktuellen Seite – Eingang, Mitte und Ausgang mit Land und IP – und holt auf Wunsch eine neue
+- Eingebaute Brücken aus dem Tor Browser (obfs4, Snowflake, meek) – Auswahl in den Einstellungen, mit Vor- und Nachteilen direkt daneben; eigene Brücken (auch webtunnel) gehen auch
+- Der Zwiebel-Button zeigt die Verbindung der aktuellen Seite – Eingang, Mitte und Ausgang mit Land und IP – und holt auf Wunsch eine neue mit anderer Mitte und anderem Ausgang
 - Namen werden über Tor aufgelöst; WebRTC und WebGL sind aus, die Zeitzone ist UTC
 - Eigene Tor-Favoriten; gesucht wird über den Onion-Dienst von DuckDuckGo
 - Links aus einem Tor-Tab bleiben in Tor-Tabs

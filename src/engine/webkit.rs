@@ -35,6 +35,7 @@ pub struct WebKitEngine {
     youtube: crate::youtube::YoutubeBlocker,
     media_fix: webkit2gtk::UserScript,
     managers: RefCell<Vec<glib::WeakRef<UserContentManager>>>,
+    tor_port: u16,
 }
 
 #[derive(Clone)]
@@ -65,9 +66,7 @@ impl WebKitEngine {
         data_manager.set_itp_enabled(true);
         WebsiteDataManager::set_memory_pressure_settings(&mut pressure.clone());
         if mode == Mode::Tor {
-            let proxy = format!("socks5://127.0.0.1:{tor_port}");
-            let mut proxy_settings = NetworkProxySettings::new(Some(&proxy), &[]);
-            data_manager.set_network_proxy_settings(NetworkProxyMode::Custom, Some(&mut proxy_settings));
+            set_tor_proxy(&data_manager, tor_port);
         }
 
         let mut builder = WebContext::builder()
@@ -151,6 +150,7 @@ impl WebKitEngine {
                 &[],
             ),
             managers: RefCell::new(Vec::new()),
+            tor_port,
         })
     }
 
@@ -205,6 +205,12 @@ impl WebKitEngine {
             g.1.push(view.downgrade());
         } else {
             groups.push((String::new(), vec![view.downgrade()]));
+        }
+    }
+
+    pub fn new_tor_circuits(&self) {
+        if self.mode == Mode::Tor {
+            set_tor_proxy(&self.data_manager, self.tor_port);
         }
     }
 
@@ -411,6 +417,9 @@ impl WebKitPage {
 
         let s = sink.clone();
         v.connect_context_menu(move |_, menu, _, hit| {
+            if hit.context_is_image() {
+                arm_image_clipboard_fix();
+            }
             let new_tab_item = |label: &str, uri: Option<glib::GString>, background: bool| {
                 let uri = uri?.to_string();
                 let action = gtk::gio::SimpleAction::new("open-in-tab", None);
@@ -518,6 +527,49 @@ fn handle_permission(view: &WebView, request: &PermissionRequest) -> bool {
     }
     request.deny();
     true
+}
+
+thread_local! {
+    static IMAGE_COPY_ARMED: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+    static IMAGE_COPY_WATCHING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn arm_image_clipboard_fix() {
+    IMAGE_COPY_ARMED.with(|a| a.set(Some(std::time::Instant::now())));
+    if IMAGE_COPY_WATCHING.with(|w| w.replace(true)) {
+        return;
+    }
+    let clipboard = gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
+    clipboard.connect_local("owner-change", false, |_| {
+        let armed = IMAGE_COPY_ARMED.with(|a| a.take()).is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(60));
+        if !armed {
+            return None;
+        }
+        let clipboard = gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
+        clipboard.request_contents(&gtk::gdk::Atom::intern("TARGETS"), |clipboard, data| {
+            let targets = data.targets().unwrap_or_default();
+            let has = |name: &str| targets.iter().any(|t| t.name() == name);
+            if has("image/png") && has("text/uri-list") {
+                clipboard.request_image(|clipboard, image| {
+                    if let Some(image) = image {
+                        clipboard.set_image(image);
+                    }
+                });
+            }
+        });
+        None
+    });
+}
+
+fn set_tor_proxy(data_manager: &WebsiteDataManager, port: u16) {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mut bytes = [0u8; 12];
+    let _ = getrandom::fill(&mut bytes);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let user: String = bytes.iter().map(|b| format!("{b:02x}")).chain(std::iter::once(format!("-{n}"))).collect();
+    let proxy = format!("socks5://{user}:poezi@127.0.0.1:{port}");
+    let mut proxy_settings = NetworkProxySettings::new(Some(&proxy), &[]);
+    data_manager.set_network_proxy_settings(NetworkProxyMode::Custom, Some(&mut proxy_settings));
 }
 
 fn enable_feature(settings: &Settings, identifier: &str) -> bool {

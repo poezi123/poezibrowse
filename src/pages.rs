@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::config::{self, Config, EngineKind, Theme, SEARCH_ENGINES, WALLPAPER_PRESETS};
+use crate::config::{self, BridgeKind, Config, EngineKind, Theme, SEARCH_ENGINES, WALLPAPER_PRESETS};
 use crate::memory;
 use crate::storage::{Entry, Shelf};
 
@@ -72,6 +72,16 @@ form.search input { flex:1; font-size:17px; padding:13px 18px; border-radius:14p
 table.stats { border-collapse: collapse; width: 100%; }
 table.stats td { padding: 7px 0; border-top: 1px solid var(--line); }
 table.stats td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.settings .wide { grid-column: 1 / -1; }
+.proscons-box { margin: -4px 0 4px; }
+.proscons-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 24px; }
+.proscons-box summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+.proscons { margin-top: 10px; font-size: 13px; }
+.proscons ul { list-style: none; margin: 4px 0 0; padding: 0; }
+.proscons li { display: flex; gap: 8px; padding: 2px 0; }
+.proscons li span { width: 12px; flex: none; font-weight: 700; }
+.proscons li.pro span { color: #3fb950; }
+.proscons li.con span { color: var(--danger); }
 @media (max-width: 600px) { .settings { grid-template-columns: 1fr; } }
 "#;
 
@@ -424,6 +434,7 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
     }
     if authorized && param(params, "save").is_some() {
         let mut c = app.config.borrow().clone();
+        let bridges_before = (c.bridge_kind(), c.tor_bridges.clone());
         let text = |k: &str| param(params, k).map(|v| v.trim().to_string());
         let flag = |k: &str| param(params, k).is_some();
         let number = |k: &str, min: u32, max: u32, old: u32| text(k).and_then(|v| v.parse::<u32>().ok()).map(|v| v.clamp(min, max)).unwrap_or(old);
@@ -467,7 +478,12 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
             _ => config::Remember::Week,
         };
         c.ignore_media_warning = flag("ignore_media_warning");
-        c.tor_use_bridges = flag("tor_use_bridges");
+        c.address_suggestions = flag("address_suggestions");
+        let bridge_kind = text("tor_bridge_kind").as_deref().and_then(BridgeKind::from_id);
+        c.tor_use_bridges = bridge_kind.is_some();
+        if bridge_kind.is_some() {
+            c.tor_bridge_kind = bridge_kind;
+        }
         c.tor_bridges = crate::tor::clean_bridges(&text("tor_bridges").unwrap_or_default().lines().map(String::from).collect::<Vec<_>>());
         c.block_allowlist = text("block_allowlist")
             .unwrap_or_default()
@@ -476,7 +492,12 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
             .filter(|l| !l.is_empty())
             .collect();
         c.save();
+        let bridges_changed = bridges_before != (c.bridge_kind(), c.tor_bridges.clone());
         *app.config.borrow_mut() = c;
+        if bridges_changed && app.tor.is_running() {
+            app.tor.stop();
+            app.tor.start(&app.config.borrow());
+        }
         app.apply_appearance();
         app.layout_changed();
         app.passwords.remember_changed();
@@ -516,6 +537,7 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         row("Tabs beim Start wiederherstellen", "", format!("<input type=\"checkbox\" name=\"restore_session\"{}>", checked(c.restore_session))),
         row("Videos mit Ton automatisch abspielen *", "", format!("<input type=\"checkbox\" name=\"autoplay_sound\"{}>", checked(c.autoplay_sound))),
         row("Hardwarebeschleunigung *", "", format!("<input type=\"checkbox\" name=\"hardware_acceleration\"{}>", checked(c.hardware_acceleration))),
+        row("Vorschläge in der Adressleiste", "Zeigt beim Tippen passende Favoriten und Seiten aus dem Verlauf", format!("<input type=\"checkbox\" name=\"address_suggestions\"{}>", checked(c.address_suggestions))),
         row("Hinweis auf fehlende Video-Plugins ausblenden", "", format!("<input type=\"checkbox\" name=\"ignore_media_warning\"{}>", checked(c.ignore_media_warning))),
         row("Standard-Zoom (%)", "", format!("<input type=\"number\" min=\"30\" max=\"300\" name=\"default_zoom\" value=\"{}\">", (c.default_zoom * 100.0).round())),
         row("Download-Ordner", "Leer = Standard-Downloadordner", format!("<input type=\"text\" name=\"download_dir\" value=\"{}\" placeholder=\"{}\">", escape(&c.download_dir), escape(&c.download_dir().to_string_lossy()))),
@@ -549,34 +571,59 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         row("Abdunkeln (%)", "Damit Suchfeld und Kacheln gut lesbar bleiben", format!("<input type=\"number\" min=\"0\" max=\"90\" name=\"wallpaper_dim\" value=\"{}\">", c.wallpaper_dim)),
         row("Unschärfe (Pixel)", "0 = gestochen scharf", format!("<input type=\"number\" min=\"0\" max=\"40\" name=\"wallpaper_blur\" value=\"{}\">", c.wallpaper_blur)),
     ];
-    let transports: String = crate::tor::TRANSPORTS
+    let lyrebird = crate::tor::bundled_lyrebird().or_else(|| crate::tor::find_binary(&["lyrebird"]));
+    let transports = match &lyrebird {
+        Some(path) => format!("<span class=\"badge-ok\">✓ lyrebird</span> <span class=\"muted\">{}</span>", escape(&path.display().to_string())),
+        None => "<span class=\"badge-err\">lyrebird fehlt – PoeziBrowse bitte neu installieren</span>".into(),
+    };
+    let kind = c.bridge_kind();
+    let option = |id: &str, label: &str, selected: bool| format!("<option value=\"{id}\"{}>{label}</option>", if selected { " selected" } else { "" });
+    let bridge_select = format!(
+        "<select name=\"tor_bridge_kind\">{}{}{}{}{}</select>",
+        option("none", "Keine Brücke – direkt verbinden", kind.is_none()),
+        option("obfs4", "obfs4 (eingebaut) – empfohlen", kind == Some(BridgeKind::Obfs4)),
+        option("snowflake", "Snowflake (eingebaut) – bei starker Zensur", kind == Some(BridgeKind::Snowflake)),
+        option("meek", "meek (eingebaut) – Notlösung", kind == Some(BridgeKind::Meek)),
+        option("custom", "Eigene Brücken (unten eintragen)", kind == Some(BridgeKind::Custom)),
+    );
+    let pros_cons = [
+        ("Keine Brücke", &["Am schnellsten", "Keine Zusatzprogramme nötig"][..], &["Dein Internetanbieter sieht, dass du Tor benutzt", "Geht nicht, wo Tor gesperrt ist"][..]),
+        ("obfs4 (eingebaut)", &["Tarnt Tor als zufälliges Rauschen – schwer zu erkennen", "Schnell und stabil", "Gute Wahl für die meisten Netze"][..], &["Die eingebauten Adressen sind öffentlich und in manchen Ländern gesperrt (z. B. China, Iran, Russland) – dann eigene Brücken nehmen"][..]),
+        ("Snowflake (eingebaut)", &["Klappt oft auch bei starker Zensur", "Läuft über ständig wechselnde Freiwilligen-Proxys (WebRTC) – kaum komplett zu sperren"][..], &["Langsamer als obfs4", "Verbindung kann schwanken oder kurz abreißen"][..]),
+        ("meek (eingebaut)", &["Versteckt sich hinter einem großen CDN – Sperren würde viele andere Seiten treffen"][..], &["Sehr langsam", "Nur als Notlösung, wenn nichts anderes geht"][..]),
+        ("Eigene Brücken", &["Private Brücken sind kaum bekannt und selten gesperrt", "Auch webtunnel möglich – sieht aus wie normales HTTPS"][..], &["Musst du selbst besorgen (bridges.torproject.org, E-Mail oder Telegram) und eintragen"][..]),
+    ];
+    let pros_cons: String = pros_cons
         .iter()
-        .map(|t| {
-            let found = crate::tor::find_binary(t.binaries).is_some();
-            format!(
-                "{} <span class=\"{}\">{}</span>",
-                t.name,
-                if found { "badge-ok" } else { "muted" },
-                if found { "✓ installiert".to_string() } else { format!("fehlt (Paket {})", t.package) }
-            )
+        .map(|(name, pros, cons)| {
+            let list = |items: &[&str], class: &str, sign: &str| items.iter().map(|i| format!("<li class=\"{class}\"><span>{sign}</span>{i}</li>")).collect::<String>();
+            format!("<div class=\"proscons\"><b>{name}</b><ul>{}{}</ul></div>", list(pros, "pro", "+"), list(cons, "con", "−"))
         })
-        .collect::<Vec<_>>()
-        .join("<br>");
+        .collect();
     let tor_installed = crate::tor::find_binary(&["tor"]).is_some();
     let tor_rows = [
         row(
             "Tor",
             "Tor-Tabs öffnest du über die Seitenleiste, das Menü oder Strg+Umschalt+U",
-            if tor_installed { "<span class=\"badge-ok\">✓ installiert</span>".into() } else { "<span class=\"badge-err\">nicht installiert – sudo pacman -S tor</span>".into() },
+            if tor_installed {
+                "<span class=\"badge-ok\">✓ installiert</span>".into()
+            } else {
+                format!("<span class=\"badge-err\">nicht installiert – {}</span>", crate::system::tor_install_command())
+            },
         ),
         row("JavaScript im Tor-Modus", "Aus ist sicherer, viele Seiten funktionieren dann aber nicht", format!("<input type=\"checkbox\" name=\"tor_javascript\"{}>", checked(c.tor_javascript))),
-        row("Brücken verwenden", "Wenn Tor in deinem Netz blockiert wird", format!("<input type=\"checkbox\" name=\"tor_use_bridges\"{}>", checked(c.tor_use_bridges))),
         row(
-            "Brücken",
-            "Eine Brücke pro Zeile. Brücken bekommst du auf <a href=\"https://bridges.torproject.org/options\">bridges.torproject.org</a>",
+            "Brücke",
+            "Brücken helfen, wenn Tor in deinem Netz blockiert ist oder niemand sehen soll, dass du Tor benutzt",
+            bridge_select,
+        ),
+        format!("<div class=\"wide\"><details class=\"proscons-box\"><summary>Vor- und Nachteile der Brücken</summary><div class=\"proscons-grid\">{pros_cons}</div></details></div>"),
+        row(
+            "Eigene Brücken",
+            "Nur für „Eigene Brücken“. Eine pro Zeile, von <a href=\"https://bridges.torproject.org/options\">bridges.torproject.org</a>",
             format!("<textarea name=\"tor_bridges\" placeholder=\"obfs4 1.2.3.4:443 FINGERPRINT cert=… iat-mode=0\">{}</textarea>", escape(&c.tor_bridges.join("\n"))),
         ),
-        row("Brückenarten", "Programme für die Brücken (Pluggable Transports)", transports),
+        row("Brücken-Programm", "Für obfs4, Snowflake, meek und webtunnel", transports),
     ];
     let password_rows = [
         row("Passwortmanager", "KeePassXC-Datenbank oder eigener Manager", escape(&app.passwords.status_text())),
