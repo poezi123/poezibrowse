@@ -750,7 +750,7 @@ impl BrowserWindow {
 
     pub fn open_tab_with(self: &Rc<Self>, uri: &str, background: bool, engine: EngineKind, mode: Mode) -> Rc<Tab> {
         let tab = self.new_tab_shell(background, mode);
-        let page = self.app.create_page(engine, mode);
+        let page = self.app.create_page(engine, mode, uri);
         self.connect_page(&tab, page.as_ref());
         page.load_uri(uri);
         tab.attach(page);
@@ -829,7 +829,7 @@ impl BrowserWindow {
             tab.container.remove(&child);
         }
         let engine = if snapshot.engine.available() { snapshot.engine } else { EngineKind::Webkit };
-        let page = self.app.create_page(engine, tab.mode);
+        let page = self.app.create_page(engine, tab.mode, &snapshot.uri);
         self.connect_page(tab, page.as_ref());
         let restored = snapshot.state.as_deref().is_some_and(|state| page.restore_state(state));
         if !restored {
@@ -840,12 +840,19 @@ impl BrowserWindow {
     }
 
     fn show_placeholder(self: &Rc<Self>, tab: &Rc<Tab>) {
+        self.show_placeholder_text(tab, "Dieser Tab schläft, um Arbeitsspeicher zu sparen.", "Aufwecken");
+    }
+
+    fn show_placeholder_text(self: &Rc<Self>, tab: &Rc<Tab>, text: &str, button_label: &str) {
         for child in tab.container.children() {
             tab.container.remove(&child);
         }
-        let label = gtk::Label::new(Some("Dieser Tab schläft, um Arbeitsspeicher zu sparen."));
+        let label = gtk::Label::new(Some(text));
+        label.set_justify(gtk::Justification::Center);
+        label.set_line_wrap(true);
+        label.set_max_width_chars(60);
         label.style_context().add_class("dim-label");
-        let button = gtk::Button::with_label("Aufwecken");
+        let button = gtk::Button::with_label(button_label);
         button.set_halign(Align::Center);
         let w = self.weak();
         let t = Rc::downgrade(tab);
@@ -940,6 +947,16 @@ impl BrowserWindow {
 
     fn on_page_event(self: &Rc<Self>, tab: &Rc<Tab>, event: PageEvent) {
         let is_current = self.current_tab().is_some_and(|t| t.id == tab.id);
+        if matches!(event, PageEvent::UriChanged | PageEvent::TitleChanged | PageEvent::LoadFinished) {
+            if let Some(page) = tab.page.borrow().as_ref() {
+                if let Some(uri) = page.uri().filter(|u| !u.is_empty()) {
+                    *tab.last_uri.borrow_mut() = uri;
+                }
+                if let Some(title) = page.title() {
+                    *tab.last_title.borrow_mut() = title;
+                }
+            }
+        }
         match event {
             PageEvent::TitleChanged | PageEvent::FaviconChanged | PageEvent::AudioChanged => {
                 tab.refresh_label();
@@ -999,21 +1016,65 @@ impl BrowserWindow {
                     self.window.unfullscreen();
                 }
             }
-            PageEvent::Crashed => {
-                if let Some(page) = tab.page.borrow_mut().take() {
-                    *tab.snapshot.borrow_mut() = Some(Snapshot {
-                        uri: page.uri().unwrap_or_default(),
-                        title: page.title().unwrap_or_default(),
-                        engine: page.engine(),
-                        state: None,
-                    });
-                }
-                tab.label.style_context().add_class("sleeping");
-                self.show_placeholder(tab);
-                tab.refresh_label();
+            PageEvent::Crashed(reason) => {
+                let w = Rc::downgrade(self);
+                let t = Rc::downgrade(tab);
+                glib::idle_add_local_once(move || {
+                    if let (Some(w), Some(t)) = (w.upgrade(), t.upgrade()) {
+                        w.handle_crash(&t, reason);
+                    }
+                });
             }
-            PageEvent::CloseRequested => self.close_tab(tab),
+            PageEvent::CloseRequested => {
+                let w = Rc::downgrade(self);
+                let t = Rc::downgrade(tab);
+                glib::idle_add_local_once(move || {
+                    if let (Some(w), Some(t)) = (w.upgrade(), t.upgrade()) {
+                        if w.tabs.borrow().iter().any(|x| x.id == t.id) {
+                            w.close_tab(&t);
+                        }
+                    }
+                });
+            }
         }
+    }
+
+    fn handle_crash(self: &Rc<Self>, tab: &Rc<Tab>, reason: String) {
+        let is_current = self.current_tab().is_some_and(|t| t.id == tab.id);
+        let Some(page) = tab.page.borrow_mut().take() else { return };
+        let uri = page.uri().filter(|u| !u.is_empty()).unwrap_or_else(|| tab.last_uri.borrow().clone());
+        crate::system::log_crash(&uri, &reason);
+        *tab.snapshot.borrow_mut() = Some(Snapshot {
+            uri,
+            title: page.title().unwrap_or_else(|| tab.last_title.borrow().clone()),
+            engine: page.engine(),
+            state: page.save_state(),
+        });
+        drop(page);
+        let again = tab.crashed_at.get().is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(60));
+        tab.crashed_at.set(Some(Instant::now()));
+        tab.label.style_context().add_class("sleeping");
+        if is_current && !again {
+            let w = Rc::downgrade(self);
+            let t = Rc::downgrade(tab);
+            glib::idle_add_local_once(move || {
+                if let (Some(w), Some(t)) = (w.upgrade(), t.upgrade()) {
+                    w.wake(&t);
+                    w.update_toolbar();
+                }
+            });
+        } else if again {
+            self.show_placeholder_text(
+                tab,
+                &format!(
+                    "Diese Seite ist wiederholt abgestürzt ({reason}).\n\n„poezibrowse --diagnose“ im Terminal zeigt mögliche Ursachen, zum Beispiel fehlende Video-Plugins."
+                ),
+                "Erneut versuchen",
+            );
+        } else {
+            self.show_placeholder_text(tab, &format!("Diese Seite ist abgestürzt ({reason})."), "Neu laden");
+        }
+        tab.refresh_label();
     }
 
     fn with_page(&self, f: impl FnOnce(&dyn Page)) {

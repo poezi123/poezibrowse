@@ -461,6 +461,12 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         c.show_favorites = flag("show_favorites");
         c.show_sidebar = flag("show_sidebar");
         c.tor_javascript = flag("tor_javascript");
+        c.pm_remember = match text("pm_remember").as_deref() {
+            Some("session") => config::Remember::Session,
+            Some("never") => config::Remember::Never,
+            _ => config::Remember::Week,
+        };
+        c.ignore_media_warning = flag("ignore_media_warning");
         c.tor_use_bridges = flag("tor_use_bridges");
         c.tor_bridges = crate::tor::clean_bridges(&text("tor_bridges").unwrap_or_default().lines().map(String::from).collect::<Vec<_>>());
         c.block_allowlist = text("block_allowlist")
@@ -473,6 +479,7 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         *app.config.borrow_mut() = c;
         app.apply_appearance();
         app.layout_changed();
+        app.passwords.remember_changed();
         notice = "<div class=\"notice\">Gespeichert. Mit * markierte Einstellungen wirken nach einem Neustart von PoeziBrowse.</div>".into();
     }
 
@@ -501,7 +508,7 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         ),
         row("Tabs schlafen legen nach", "Minuten ohne Benutzung, 0 = nie", format!("<input type=\"number\" min=\"0\" name=\"tab_sleep_minutes\" value=\"{}\">", c.tab_sleep_minutes)),
         row("RAM-Budget (MB)", "Wird es überschritten, schläft sofort der am längsten unbenutzte Tab ein. 0 = aus", format!("<input type=\"number\" min=\"0\" name=\"ram_budget_mb\" value=\"{}\">", c.ram_budget_mb)),
-        row("Tabs pro Prozess *", "Mehr = weniger RAM, aber ein Absturz trifft mehrere Tabs", format!("<input type=\"number\" min=\"1\" max=\"50\" name=\"tabs_per_process\" value=\"{}\">", c.tabs_per_process)),
+        row("Tabs pro Prozess *", "Nur Tabs derselben Website teilen sich einen Prozess – so reißt ein Absturz keine anderen Seiten mit", format!("<input type=\"number\" min=\"1\" max=\"50\" name=\"tabs_per_process\" value=\"{}\">", c.tabs_per_process)),
         row("Speicherlimit pro Prozess (MB) *", "Darüber gibt WebKit Caches frei, 0 = Standard", format!("<input type=\"number\" min=\"0\" name=\"memory_limit_mb\" value=\"{}\">", c.memory_limit_mb)),
         row("RAM-Sparmodus *", "Kleinere Caches, kein Seiten-Cache für Zurück/Vor", format!("<input type=\"checkbox\" name=\"saver_mode\"{}>", checked(c.saver_mode))),
         row("Werbung und Tracker blockieren *", "EasyList, EasyPrivacy, EasyList Germany", format!("<input type=\"checkbox\" name=\"block_ads\"{}>", checked(c.block_ads))),
@@ -509,6 +516,7 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         row("Tabs beim Start wiederherstellen", "", format!("<input type=\"checkbox\" name=\"restore_session\"{}>", checked(c.restore_session))),
         row("Videos mit Ton automatisch abspielen *", "", format!("<input type=\"checkbox\" name=\"autoplay_sound\"{}>", checked(c.autoplay_sound))),
         row("Hardwarebeschleunigung *", "", format!("<input type=\"checkbox\" name=\"hardware_acceleration\"{}>", checked(c.hardware_acceleration))),
+        row("Hinweis auf fehlende Video-Plugins ausblenden", "", format!("<input type=\"checkbox\" name=\"ignore_media_warning\"{}>", checked(c.ignore_media_warning))),
         row("Standard-Zoom (%)", "", format!("<input type=\"number\" min=\"30\" max=\"300\" name=\"default_zoom\" value=\"{}\">", (c.default_zoom * 100.0).round())),
         row("Download-Ordner", "Leer = Standard-Downloadordner", format!("<input type=\"text\" name=\"download_dir\" value=\"{}\" placeholder=\"{}\">", escape(&c.download_dir), escape(&c.download_dir().to_string_lossy()))),
     ];
@@ -572,6 +580,21 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
     ];
     let password_rows = [
         row("Passwortmanager", "KeePassXC-Datenbank oder eigener Manager", escape(&app.passwords.status_text())),
+        row(
+            "Master-Passwort merken",
+            "„Nie“ lässt den Passwortmanager dauerhaft gesperrt: das Master-Passwort wird bei jeder Nutzung abgefragt und nirgends gespeichert",
+            {
+                let selected = |m: config::Remember| if c.pm_remember == m { " selected" } else { "" };
+                format!(
+                    "<select name=\"pm_remember\"><option value=\"week\"{}>7 Tage (verschlüsselt mit dem TPM-Chip)</option>\
+                     <option value=\"session\"{}>Bis PoeziBrowse geschlossen wird</option>\
+                     <option value=\"never\"{}>Nie – jedes Mal fragen</option></select>",
+                    selected(config::Remember::Week),
+                    selected(config::Remember::Session),
+                    selected(config::Remember::Never)
+                )
+            },
+        ),
         row(
             "",
             "Ausfüllen nur nach Klick auf den Schlüssel, Speichern nur nach „Ja“. Das Master-Passwort wird mit dem TPM-Chip verschlüsselt und nach 7 Tagen neu abgefragt.",

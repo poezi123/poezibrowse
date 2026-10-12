@@ -46,9 +46,9 @@ Telemetrie, nichts läuft im Hintergrund.
 
 | System | Paket | |
 |---|---|---|
-| **Arch Linux**, Garuda, CachyOS, Manjaro, EndeavourOS | `poezibrowse-0.4.0-1-x86_64.pkg.tar.zst` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.4.0/poezibrowse-0.4.0-1-x86_64.pkg.tar.zst) |
-| **Ubuntu 24.04+**, Debian 13, Linux Mint 22 | `poezibrowse_0.4.0_amd64.deb` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.4.0/poezibrowse_0.4.0_amd64.deb) |
-| **Jedes andere Linux** (Fedora, openSUSE, …) | `poezibrowse-0.4.0-linux-x64.tar.gz` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.4.0/poezibrowse-0.4.0-linux-x64.tar.gz) |
+| **Arch Linux**, Garuda, CachyOS, Manjaro, EndeavourOS | `poezibrowse-0.4.1-1-x86_64.pkg.tar.zst` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.4.1/poezibrowse-0.4.1-1-x86_64.pkg.tar.zst) |
+| **Ubuntu 24.04+**, Debian 13, Linux Mint 22 | `poezibrowse_0.4.1_amd64.deb` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.4.1/poezibrowse_0.4.1_amd64.deb) |
+| **Jedes andere Linux** (Fedora, openSUSE, …) | `poezibrowse-0.4.1-linux-x64.tar.gz` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.4.1/poezibrowse-0.4.1-linux-x64.tar.gz) |
 
 Alle Versionen und Prüfsummen (`SHA256SUMS.txt`) stehen auf der
 [Release-Seite](https://github.com/poezi123/poezibrowse/releases).
@@ -63,20 +63,20 @@ also Ubuntu 24.04, Debian 13, Fedora 40 oder jedes aktuelle Arch-basierte System
 **Arch Linux und Ableger**
 
 ```sh
-sudo pacman -U poezibrowse-0.4.0-1-x86_64.pkg.tar.zst
+sudo pacman -U poezibrowse-0.4.1-1-x86_64.pkg.tar.zst
 ```
 
 **Ubuntu, Debian, Linux Mint** – Datei doppelklicken oder:
 
 ```sh
-sudo apt install ./poezibrowse_0.4.0_amd64.deb
+sudo apt install ./poezibrowse_0.4.1_amd64.deb
 ```
 
 **Jede andere Distribution** – zuerst WebKitGTK 4.1 über die Paketverwaltung installieren, dann (ohne Root-Rechte):
 
 ```sh
-tar xzf poezibrowse-0.4.0-linux-x64.tar.gz
-cd poezibrowse-0.4.0-linux-x64
+tar xzf poezibrowse-0.4.1-linux-x64.tar.gz
+cd poezibrowse-0.4.1-linux-x64
 ./install.sh        # trägt PoeziBrowse ins Startmenü ein (~/.local)
 ```
 
@@ -135,7 +135,7 @@ Browser-Fingerprinting. Wenn deine Sicherheit davon abhängt, nimm den Tor Brows
 - Ausgefüllt wird nur nach Klick auf den Schlüssel, nur auf HTTPS-Seiten und nur auf der passenden Seite
 - Fragt vor dem Speichern neuer oder geänderter Logins – und erst, wenn der Login geklappt hat; geschrieben wird von KeePassXC selbst
 - Passwort-Generator von KeePassXC für Registrierungen
-- Das Master-Passwort wird mit dem TPM-Chip deines PCs verschlüsselt (`systemd-creds`) und alle 7 Tage neu abgefragt – im Klartext wird es nie gespeichert
+- Das Master-Passwort wird mit dem TPM-Chip deines PCs verschlüsselt (`systemd-creds`) und alle 7 Tage neu abgefragt – oder, wenn du willst, nur bis PoeziBrowse geschlossen wird, oder gar nicht gemerkt, sodass der Manager dauerhaft gesperrt bleibt. Im Klartext wird es nie gespeichert
 - Details: [docs/passwortmanager.md](docs/passwortmanager.md)
 
 ## Arbeitsspeicher
@@ -153,7 +153,7 @@ Den meisten Speicher brauchen die Webseiten selbst. PoeziBrowse spart, wo es geh
 
 - Hintergrund-Tabs schlafen nach 10 Minuten ein und geben ihren Speicher komplett frei
 - RAM-Budget (Standard 1,5 GB): darüber schläft sofort der am längsten unbenutzte Tab ein
-- Bis zu sechs Tabs teilen sich einen Web-Prozess
+- Bis zu sechs Tabs derselben Website teilen sich einen Web-Prozess – ein Absturz reißt keine anderen Seiten mit
 - WebKit gibt seine Caches frei, wenn PoeziBrowse im Hintergrund ist
 - Filterlisten werden in einem kurzlebigen Hilfsprozess umgewandelt
 
@@ -192,6 +192,12 @@ WebKitGTK 2.52 kann VP9-Videos, die direkt als WebM-Datei eingebunden sind, nich
 passiert auch im MiniBrowser von WebKit selbst. PoeziBrowse sagt Webseiten deshalb, dass VP9 nicht
 verfügbar ist, und schaltet solche Videos auf die MP4-Fassung der Seite um, wenn es eine gibt. YouTube
 ist nicht betroffen.
+
+**Seiten stürzen ab oder laden nicht (z. B. auf CachyOS).**
+Führe `poezibrowse --diagnose` aus. WebKits Web-Prozess stürzt auf Seiten mit Video oder Ton ab, wenn
+GStreamer-Plugins fehlen; die Ausgabe nennt sie und den Installationsbefehl für deine Distribution
+(Arch/CachyOS: `sudo pacman -S --needed gst-plugins-good gst-plugins-base gst-libav`). Abstürze landen
+in `~/.cache/poezibrowse/crashes.log`.
 
 **Ist der Tor-Modus so sicher wie der Tor Browser?**
 Nein. Er versteckt deine IP-Adresse und löst Namen über Tor auf, hat aber nicht den Schutz des Tor

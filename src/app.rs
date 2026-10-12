@@ -38,6 +38,7 @@ pub struct App {
     quitting: Cell<bool>,
     system_dark: std::cell::OnceCell<bool>,
     start_action: Cell<Option<&'static str>>,
+    environment_checked: Cell<bool>,
     me: Weak<App>,
 }
 
@@ -62,6 +63,7 @@ impl App {
             quitting: Cell::new(false),
             system_dark: std::cell::OnceCell::new(),
             start_action: Cell::new(None),
+            environment_checked: Cell::new(false),
             me: me.clone(),
         })
     }
@@ -100,6 +102,9 @@ impl App {
     }
 
     pub fn first_run_checks(self: &Rc<Self>) {
+        if !self.environment_checked.replace(true) {
+            self.environment_checks();
+        }
         if !self.passwords.needs_setup() {
             return;
         }
@@ -109,6 +114,35 @@ impl App {
                 if let Some(window) = app.last_window() {
                     app.passwords.setup_dialog(window.window.upcast_ref());
                 }
+            }
+        });
+    }
+
+    fn environment_checks(self: &Rc<Self>) {
+        let me = self.me.clone();
+        glib::timeout_add_local_once(Duration::from_millis(300), move || {
+            let Some(app) = me.upgrade() else { return };
+            let Some(window) = app.last_window() else { return };
+            if !crate::system::tls_available() {
+                let command = crate::system::tls_install_command();
+                window.show_prompt(
+                    &format!("HTTPS funktioniert nicht, weil „glib-networking“ fehlt. Fast keine Seite wird laden. Installieren mit: {command}"),
+                    "Befehl kopieren",
+                    "Schließen",
+                    move |copy| copy_text(copy, command),
+                );
+                return;
+            }
+            let media = crate::system::media_report();
+            if !media.missing.is_empty() && !app.config.borrow().ignore_media_warning {
+                let command = crate::system::media_install_command();
+                let what: Vec<&str> = media.missing.iter().map(|(_, purpose)| *purpose).collect();
+                let text = if media.critical {
+                    format!("Es fehlen GStreamer-Plugins. Ohne sie stürzen Seiten mit Video oder Ton ab. Fehlt: {}. Installieren mit: {command}", what.join(", "))
+                } else {
+                    format!("Für manche Videos fehlen GStreamer-Plugins: {}. Installieren mit: {command}", what.join(", "))
+                };
+                window.show_prompt(&text, "Befehl kopieren", "Schließen", move |copy| copy_text(copy, command));
             }
         });
     }
@@ -143,7 +177,9 @@ impl App {
             let _ = crate::config::private_dir(&dir);
         }
         load_css();
+        crate::system::install_fallback_icons();
         self.apply_appearance();
+        self.passwords.remember_changed();
         if self.config.borrow().block_ads {
             let blocker = Blocker::new();
             blocker.start();
@@ -213,9 +249,9 @@ impl App {
         engine
     }
 
-    pub fn create_page(&self, engine: EngineKind, mode: Mode) -> Box<dyn Page> {
+    pub fn create_page(&self, engine: EngineKind, mode: Mode, uri: &str) -> Box<dyn Page> {
         match engine {
-            _ => Box::new(PageHandle(self.webkit_engine(mode).create_page(None))),
+            _ => Box::new(PageHandle(self.webkit_engine(mode).create_page(None, uri))),
         }
     }
 
@@ -638,6 +674,12 @@ impl App {
                 let _ = gio::AppInfo::launch_default_for_uri(&glib::filename_to_uri(&dir, None).unwrap_or_default(), None::<&gio::AppLaunchContext>);
             }
         });
+    }
+}
+
+fn copy_text(copy: bool, text: &str) {
+    if copy {
+        gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD).set_text(text);
     }
 }
 

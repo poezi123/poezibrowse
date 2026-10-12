@@ -16,7 +16,7 @@ pub enum PageEvent {
     Popup(Box<dyn Page>),
     Fullscreen(bool),
     AudioChanged,
-    Crashed,
+    Crashed(String),
     CloseRequested,
 }
 

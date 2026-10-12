@@ -29,7 +29,7 @@ pub struct WebKitEngine {
     data_manager: WebsiteDataManager,
     tabs_per_process: u32,
     mode: Mode,
-    process_groups: RefCell<Vec<Vec<glib::WeakRef<WebView>>>>,
+    process_groups: RefCell<Vec<(String, Vec<glib::WeakRef<WebView>>)>>,
     content_manager_hook: RefCell<Option<Rc<dyn Fn(&UserContentManager, &WebView)>>>,
     blocking: RefCell<Option<Blocking>>,
     youtube: crate::youtube::YoutubeBlocker,
@@ -170,28 +170,28 @@ impl WebKitEngine {
         *self.content_manager_hook.borrow_mut() = Some(hook);
     }
 
-    fn process_partner(&self) -> (Option<WebView>, usize) {
+    fn process_partner(&self, site: &str) -> (Option<WebView>, usize) {
         let mut groups = self.process_groups.borrow_mut();
         for group in groups.iter_mut() {
-            group.retain(|w| w.upgrade().is_some());
+            group.1.retain(|w| w.upgrade().is_some());
         }
-        groups.retain(|g| !g.is_empty());
+        groups.retain(|g| !g.1.is_empty());
         let limit = self.tabs_per_process as usize;
-        if limit > 1 {
+        if limit > 1 && !site.is_empty() {
             for (i, group) in groups.iter().enumerate() {
-                if group.len() < limit {
-                    return (group[0].upgrade(), i);
+                if group.0 == site && group.1.len() < limit {
+                    return (group.1[0].upgrade(), i);
                 }
             }
         }
-        groups.push(Vec::new());
+        groups.push((site.to_string(), Vec::new()));
         (None, groups.len() - 1)
     }
 
     fn register_in_group(&self, view: &WebView, group: usize) {
         let mut groups = self.process_groups.borrow_mut();
         if let Some(g) = groups.get_mut(group) {
-            g.push(view.downgrade());
+            g.1.push(view.downgrade());
         }
     }
 
@@ -200,11 +200,11 @@ impl WebKitEngine {
         let partner_ptr = partner.as_ptr();
         if let Some(g) = groups
             .iter_mut()
-            .find(|g| g.iter().any(|w| w.upgrade().is_some_and(|v| v.as_ptr() == partner_ptr)))
+            .find(|g| g.1.iter().any(|w| w.upgrade().is_some_and(|v| v.as_ptr() == partner_ptr)))
         {
-            g.push(view.downgrade());
+            g.1.push(view.downgrade());
         } else {
-            groups.push(vec![view.downgrade()]);
+            groups.push((String::new(), vec![view.downgrade()]));
         }
     }
 
@@ -250,7 +250,8 @@ impl WebKitEngine {
         ucm
     }
 
-    pub fn create_page(self: &Rc<Self>, related: Option<&WebView>) -> Rc<WebKitPage> {
+    pub fn create_page(self: &Rc<Self>, related: Option<&WebView>, uri: &str) -> Rc<WebKitPage> {
+        let site = site_key(uri);
         let ucm = self.new_content_manager();
         let builder = WebView::builder()
             .user_content_manager(&ucm)
@@ -263,7 +264,7 @@ impl WebKitEngine {
                 view
             }
             None => {
-                let (partner, group) = self.process_partner();
+                let (partner, group) = self.process_partner(&site);
                 let view = match &partner {
                     Some(p) => builder.related_view(p).build(),
                     None => builder.web_context(&self.context).build(),
@@ -356,14 +357,21 @@ impl WebKitPage {
             false
         });
         let s = sink.clone();
-        v.connect_web_process_terminated(move |_, _| s.emit(PageEvent::Crashed));
+        v.connect_web_process_terminated(move |_, reason| {
+            let text = match reason {
+                webkit2gtk::WebProcessTerminationReason::ExceededMemoryLimit => "zu viel Arbeitsspeicher",
+                webkit2gtk::WebProcessTerminationReason::TerminatedByApi => "beendet",
+                _ => "Absturz",
+            };
+            s.emit(PageEvent::Crashed(text.to_string()));
+        });
         let s = sink.clone();
         v.connect_close(move |_| s.emit(PageEvent::CloseRequested));
 
         let engine = self.engine.clone();
         let s = sink.clone();
         v.connect_create(move |opener, _action| {
-            let page = engine.create_page(Some(opener));
+            let page = engine.create_page(Some(opener), "");
             let widget = page.view.clone().upcast::<gtk::Widget>();
             s.emit(PageEvent::Popup(Box::new(PageHandle(page))));
             Some(widget)
@@ -512,7 +520,25 @@ fn handle_permission(view: &WebView, request: &PermissionRequest) -> bool {
     true
 }
 
-fn sandbox_usable() -> bool {
+pub fn site_key(uri: &str) -> String {
+    if uri.starts_with("poezi:") {
+        return "poezi".into();
+    }
+    let Some(host) = config::host_of(uri) else { return String::new() };
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return host;
+    }
+    let labels: Vec<&str> = host.split('.').filter(|l| !l.is_empty()).collect();
+    let n = labels.len();
+    if n <= 2 {
+        return labels.join(".");
+    }
+    let second = labels[n - 2];
+    let take = if labels[n - 1].len() == 2 && second.len() <= 3 && ["co", "com", "org", "net", "ac", "gov", "edu", "or", "ne"].contains(&second) { 3 } else { 2 };
+    labels[n - take..].join(".")
+}
+
+pub fn sandbox_usable() -> bool {
     static USABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *USABLE.get_or_init(|| {
         which("bwrap")
@@ -642,5 +668,21 @@ impl Page for PageHandle {
     }
     fn close(&self) {
         self.0.view.stop_loading();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::site_key;
+
+    #[test]
+    fn sites() {
+        assert_eq!(site_key("https://www.youtube.com/watch?v=1"), "youtube.com");
+        assert_eq!(site_key("https://m.youtube.com/"), "youtube.com");
+        assert_eq!(site_key("https://www.amazon.co.uk/x"), "amazon.co.uk");
+        assert_eq!(site_key("https://de.wikipedia.org/wiki/Rust"), "wikipedia.org");
+        assert_eq!(site_key("poezi://start"), "poezi");
+        assert_eq!(site_key("http://192.168.0.1/"), "192.168.0.1");
+        assert_eq!(site_key("about:blank"), "");
     }
 }

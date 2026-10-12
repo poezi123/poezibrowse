@@ -13,6 +13,10 @@ PoeziBrowse kann eine **KeePassXC-Datenbank** (`.kdbx`) nutzen oder einen **eige
 
 - Das Master-Passwort wird in einem eigenen Dialog eingegeben, nie auf einer Webseite.
 - Gespeichert wird es mit `systemd-creds --user`: verschlüsselt mit dem **TPM-Chip** des PCs und an dein Benutzerkonto gebunden, mit eingebautem Ablaufdatum nach **7 Tagen**. Auf einem anderen PC oder für einen anderen Benutzer ist die Datei wertlos. Ohne TPM wird der Schlüsselbund (KWallet) verwendet, ohne beides nur der Arbeitsspeicher.
+- Unter **Einstellungen → Master-Passwort merken** (und schon im Einrichtungsdialog) lässt sich das ändern:
+  - **7 Tage** – wie oben beschrieben (Standard)
+  - **Bis PoeziBrowse geschlossen wird** – nur im Arbeitsspeicher, nie auf der Festplatte
+  - **Nie** – der Passwortmanager bleibt dauerhaft gesperrt; das Master-Passwort wird bei jedem Ausfüllen, Speichern und Öffnen des Managers abgefragt und sofort wieder vergessen. Beim Umstellen wird ein schon gespeichertes Master-Passwort gelöscht.
 - An `keepassxc-cli` werden Passwörter nur über eine Pipe übergeben, nie als Programmargument.
 - Die Datenbank wird nur geöffnet, wenn sie gebraucht wird. Damit PoeziBrowse weiß, welche Seiten Einträge haben, ohne die Datenbank zu öffnen, gibt es einen Index aus HMAC-SHA256-Hashes der Domains; der Schlüssel dafür liegt ebenfalls im TPM-Speicher. Der Index verrät nicht, wo du Konten hast.
 - Das Formular-Skript läuft in einer abgeschotteten JavaScript-Welt: Webseiten können es nicht sehen, nicht aufrufen und keine Nachrichten an den Passwortmanager vortäuschen. Es reagiert nur auf echte Klicks und Tasten.

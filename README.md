@@ -48,9 +48,9 @@ The interface is in German for now.
 
 | System | Package | |
 |---|---|---|
-| **Arch Linux**, Garuda, CachyOS, Manjaro, EndeavourOS | `poezibrowse-0.4.0-1-x86_64.pkg.tar.zst` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.4.0/poezibrowse-0.4.0-1-x86_64.pkg.tar.zst) |
-| **Ubuntu 24.04+**, Debian 13, Linux Mint 22 | `poezibrowse_0.4.0_amd64.deb` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.4.0/poezibrowse_0.4.0_amd64.deb) |
-| **Any other Linux** (Fedora, openSUSE, …) | `poezibrowse-0.4.0-linux-x64.tar.gz` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.4.0/poezibrowse-0.4.0-linux-x64.tar.gz) |
+| **Arch Linux**, Garuda, CachyOS, Manjaro, EndeavourOS | `poezibrowse-0.4.1-1-x86_64.pkg.tar.zst` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.4.1/poezibrowse-0.4.1-1-x86_64.pkg.tar.zst) |
+| **Ubuntu 24.04+**, Debian 13, Linux Mint 22 | `poezibrowse_0.4.1_amd64.deb` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.4.1/poezibrowse_0.4.1_amd64.deb) |
+| **Any other Linux** (Fedora, openSUSE, …) | `poezibrowse-0.4.1-linux-x64.tar.gz` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.4.1/poezibrowse-0.4.1-linux-x64.tar.gz) |
 
 All versions and checksums (`SHA256SUMS.txt`) are on the
 [releases page](https://github.com/poezi123/poezibrowse/releases).
@@ -65,20 +65,20 @@ that means Ubuntu 24.04, Debian 13, Fedora 40 or any current Arch-based system.
 **Arch Linux and derivatives**
 
 ```sh
-sudo pacman -U poezibrowse-0.4.0-1-x86_64.pkg.tar.zst
+sudo pacman -U poezibrowse-0.4.1-1-x86_64.pkg.tar.zst
 ```
 
 **Ubuntu, Debian, Linux Mint** – double-click the file, or:
 
 ```sh
-sudo apt install ./poezibrowse_0.4.0_amd64.deb
+sudo apt install ./poezibrowse_0.4.1_amd64.deb
 ```
 
 **Any other distribution** – install WebKitGTK 4.1 with your package manager first, then (no root needed):
 
 ```sh
-tar xzf poezibrowse-0.4.0-linux-x64.tar.gz
-cd poezibrowse-0.4.0-linux-x64
+tar xzf poezibrowse-0.4.1-linux-x64.tar.gz
+cd poezibrowse-0.4.1-linux-x64
 ./install.sh        # adds PoeziBrowse to your app menu (~/.local)
 ```
 
@@ -137,7 +137,7 @@ fingerprinting. If your safety depends on it, use the Tor Browser.
 - Fills in logins only after you click the key, only on HTTPS and only on the matching site
 - Asks before saving new or changed logins – and only after the login worked; KeePassXC itself writes the file
 - Password generator from KeePassXC for sign-up forms
-- The master password is sealed with your PC's TPM (`systemd-creds`) and asked again every 7 days – it is never stored in plain text
+- The master password is sealed with your PC's TPM (`systemd-creds`) and asked again every 7 days – or, if you choose, kept only until PoeziBrowse closes, or never remembered at all so the manager stays locked. It is never stored in plain text
 - Details: [docs/passwortmanager.md](docs/passwortmanager.md)
 
 ## Memory
@@ -155,7 +155,7 @@ Most of a browser's memory is used by the web pages themselves, so PoeziBrowse s
 
 - Background tabs fall asleep after 10 minutes and free their memory completely
 - A RAM budget (default 1.5 GB): above it, the least recently used tab goes to sleep immediately
-- Up to six tabs share one web process
+- Up to six tabs of the same website share one web process – a crash never takes other sites with it
 - WebKit releases its caches when PoeziBrowse is in the background
 - Filter lists are compiled in a short-lived helper process
 
@@ -193,6 +193,12 @@ engine written in Rust, is planned as a second engine – see the
 WebKitGTK 2.52 fails to play VP9 videos embedded directly as WebM files – the same happens in
 WebKit's own MiniBrowser. PoeziBrowse tells pages that VP9 is unavailable and switches such videos to
 the page's MP4 version when there is one. YouTube is not affected.
+
+**Pages crash or do not load (e.g. on CachyOS).**
+Run `poezibrowse --diagnose`. WebKit's web process crashes on pages with video or audio when the
+GStreamer plugins are missing; the output names them and the install command for your distribution
+(Arch/CachyOS: `sudo pacman -S --needed gst-plugins-good gst-plugins-base gst-libav`). Crashes are
+logged in `~/.cache/poezibrowse/crashes.log`.
 
 **Is Tor mode as safe as the Tor Browser?**
 No. It hides your IP address and resolves names through Tor, but it does not have the Tor Browser's

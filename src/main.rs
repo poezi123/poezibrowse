@@ -8,6 +8,7 @@ mod passwords;
 mod session;
 mod sidebar;
 mod storage;
+mod system;
 mod tab;
 mod titlebar;
 mod tor;
@@ -18,6 +19,10 @@ use gtk::gio;
 use gtk::prelude::*;
 
 fn main() -> gtk::glib::ExitCode {
+    if std::env::args().nth(1).as_deref() == Some("--diagnose") {
+        print!("{}", system::diagnose());
+        return gtk::glib::ExitCode::SUCCESS;
+    }
     if std::env::args().nth(1).as_deref() == Some(blocker::BUILD_FILTERS_ARG) {
         return if blocker::build_filter_files() { gtk::glib::ExitCode::SUCCESS } else { gtk::glib::ExitCode::FAILURE };
     }

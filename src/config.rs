@@ -72,6 +72,17 @@ pub struct Config {
     pub password_manager: String,
     pub pm_database: String,
     pub pm_keyfile: String,
+    pub pm_remember: Remember,
+    pub ignore_media_warning: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Remember {
+    #[default]
+    Week,
+    Session,
+    Never,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,6 +147,8 @@ impl Default for Config {
             password_manager: String::new(),
             pm_database: String::new(),
             pm_keyfile: String::new(),
+            pm_remember: Remember::Week,
+            ignore_media_warning: false,
         }
     }
 }

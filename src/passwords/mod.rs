@@ -19,7 +19,7 @@ use webkit2gtk::{
 use zeroize::Zeroizing;
 
 use crate::app::App;
-use crate::config::{self, Mode};
+use crate::config::{self, Mode, Remember};
 use secret::Kind;
 use vault::{Location, Login};
 
@@ -285,7 +285,8 @@ impl PasswordManager {
         }
         let me = self.clone();
         let location = self.location();
-        let cached_master = self.cache.get(Kind::Master);
+        let cached_master = self.cached_master();
+        let may_load = self.remember() == Remember::Week;
         glib::MainContext::default().spawn_local(async move {
             let result = gio::spawn_blocking(move || {
                 let key = get_or_create_index_key();
@@ -296,7 +297,7 @@ impl PasswordManager {
                         return (key, hashes.clone(), current, None);
                     }
                 }
-                let master = cached_master.or_else(|| secret::load(Kind::Master));
+                let master = cached_master.or_else(|| if may_load { secret::load(Kind::Master) } else { None });
                 if let (Some(location), Some(master)) = (location.as_ref(), master.as_ref()) {
                     if let Ok(logins) = vault::open(location, master) {
                         let hashes = index_hashes(key.as_bytes(), &logins);
@@ -312,7 +313,7 @@ impl PasswordManager {
             if let Ok((key, hashes, state, master)) = result {
                 me.cache.put(Kind::IndexKey, &key);
                 if let Some(master) = master {
-                    me.cache.put(Kind::Master, &master);
+                    me.keep_master(&master);
                 }
                 *me.index.borrow_mut() = Index { hashes, state, loaded: true };
             }
@@ -320,9 +321,39 @@ impl PasswordManager {
         });
     }
 
+    pub fn remember(&self) -> Remember {
+        self.app().map(|a| a.config.borrow().pm_remember).unwrap_or_default()
+    }
+
+    fn cached_master(&self) -> Option<Zeroizing<String>> {
+        if self.remember() == Remember::Never { None } else { self.cache.get(Kind::Master) }
+    }
+
+    fn keep_master(&self, master: &str) {
+        if self.remember() != Remember::Never {
+            self.cache.put(Kind::Master, master);
+        }
+    }
+
+    pub fn remember_changed(&self) {
+        let remember = self.remember();
+        if remember == Remember::Never {
+            self.cache.clear(Kind::Master);
+        }
+        if remember != Remember::Week {
+            glib::MainContext::default().spawn_local(async {
+                let _ = gio::spawn_blocking(|| secret::forget(Kind::Master)).await;
+            });
+        }
+    }
+
     fn with_master(self: &Rc<Self>, parent: &gtk::Window, then: impl FnOnce(Zeroizing<String>) + 'static) {
-        if let Some(master) = self.cache.get(Kind::Master) {
+        if let Some(master) = self.cached_master() {
             then(master);
+            return;
+        }
+        if self.remember() != Remember::Week {
+            self.unlock_dialog(parent, Box::new(then));
             return;
         }
         let me = self.clone();
@@ -331,7 +362,7 @@ impl PasswordManager {
             let loaded = gio::spawn_blocking(|| secret::load(Kind::Master)).await.ok().flatten();
             match loaded {
                 Some(master) => {
-                    me.cache.put(Kind::Master, &master);
+                    me.keep_master(&master);
                     then(master);
                 }
                 None => me.unlock_dialog(&parent, Box::new(then)),
@@ -537,15 +568,20 @@ impl PasswordManager {
         }
         let me = self.clone();
         let parent = window.window.clone().upcast::<gtk::Window>();
-        let cached = self.cache.get(Kind::Master);
+        let cached = self.cached_master();
+        let may_load = self.remember() == Remember::Week;
         let Some(location) = self.location() else { return };
         glib::MainContext::default().spawn_local(async move {
             let loaded = match cached {
                 Some(m) => Some(m),
-                None => gio::spawn_blocking(|| secret::load(Kind::Master)).await.ok().flatten(),
+                None if may_load => gio::spawn_blocking(|| secret::load(Kind::Master)).await.ok().flatten(),
+                None => None,
             };
-            let Some(master) = loaded else { return };
-            me.cache.put(Kind::Master, &master);
+            let Some(master) = loaded else {
+                me.ask_check(&window, host, username, password);
+                return;
+            };
+            me.keep_master(&master);
             let check = master.clone();
             let logins = gio::spawn_blocking(move || vault::open(&location, &check)).await.ok().and_then(Result::ok);
             let Some(logins) = logins else { return };
@@ -561,6 +597,40 @@ impl PasswordManager {
             }
             let question = format!("Neuen Login für {host} in {label} speichern?");
             me.ask_save(&window, question, host, username, password, None);
+        });
+    }
+
+    fn ask_check(self: &Rc<Self>, window: &Rc<crate::window::BrowserWindow>, host: String, username: String, password: Zeroizing<String>) {
+        let me = self.clone();
+        let parent = window.window.clone().upcast::<gtk::Window>();
+        let question = format!("Login für {host} in {} speichern oder aktualisieren? (Dafür wird die Datenbank entsperrt.)", self.label());
+        window.show_prompt(&question, "Ja", "Nein", move |yes| {
+            if !yes {
+                return;
+            }
+            let Some(location) = me.location() else { return };
+            let (host, username, password, parent2) = (host.clone(), username.clone(), password.clone(), parent.clone());
+            me.with_logins(&parent, move |logins, master| {
+                let existing = logins
+                    .iter()
+                    .filter(|l| vault::host_matches(&l.url, &host))
+                    .find(|l| l.username == username)
+                    .map(|l| (l.entry_path.clone(), *l.password == *password));
+                if matches!(existing, Some((_, true))) {
+                    return;
+                }
+                glib::MainContext::default().spawn_local(async move {
+                    let result = gio::spawn_blocking(move || match existing {
+                        Some((path, _)) => vault::update_password(&location, &master, &path, &password),
+                        None => vault::add_login(&location, &master, &host, &username, &format!("https://{host}"), &password),
+                    })
+                    .await
+                    .unwrap_or_else(|_| Err("Fehler".into()));
+                    if let Err(e) = result {
+                        error_dialog(&parent2, "Login konnte nicht gespeichert werden", &e);
+                    }
+                });
+            });
         });
     }
 
@@ -630,8 +700,13 @@ impl PasswordManager {
             m.set_margin_end(16);
         }
         let info = gtk::Label::new(Some(&format!(
-            "Master-Passwort für\n{}\n\nPoeziBrowse merkt es sich danach 7 Tage lang sicher und fragt dann neu.",
-            location.path.display()
+            "Master-Passwort für\n{}\n\n{}",
+            location.path.display(),
+            match self.remember() {
+                Remember::Week => "PoeziBrowse merkt es sich danach 7 Tage lang verschlüsselt und fragt dann neu.",
+                Remember::Session => "PoeziBrowse merkt es sich, bis du den Browser schließt.",
+                Remember::Never => "Der Passwortmanager bleibt gesperrt – das Passwort wird nur für diesen Vorgang benutzt.",
+            }
         )));
         info.set_xalign(0.0);
         info.set_line_wrap(true);
@@ -663,9 +738,11 @@ impl PasswordManager {
                 dialog.set_sensitive(true);
                 match ok {
                     Ok(()) => {
-                        me.cache.put(Kind::Master, &password);
-                        let stored = password.clone();
-                        let _ = gio::spawn_blocking(move || secret::store(Kind::Master, &stored)).await;
+                        me.keep_master(&password);
+                        if me.remember() == Remember::Week {
+                            let stored = password.clone();
+                            let _ = gio::spawn_blocking(move || secret::store(Kind::Master, &stored)).await;
+                        }
                         dialog.hide();
                         dialog.close();
                         if let Some(then) = then.borrow_mut().take() {
@@ -731,6 +808,18 @@ impl PasswordManager {
         area.pack_start(&none, false, false, 0);
         area.pack_start(&password, false, false, 4);
         area.pack_start(&repeat, false, false, 0);
+        let remember_label = dim_label("Master-Passwort merken:");
+        let remember = gtk::ComboBoxText::new();
+        remember.append(Some("week"), "7 Tage (verschlüsselt mit dem TPM-Chip)");
+        remember.append(Some("session"), "Bis PoeziBrowse geschlossen wird");
+        remember.append(Some("never"), "Nie – jedes Mal fragen (dauerhaft gesperrt)");
+        remember.set_active_id(Some(match self.remember() {
+            Remember::Week => "week",
+            Remember::Session => "session",
+            Remember::Never => "never",
+        }));
+        area.pack_start(&remember_label, false, false, 4);
+        area.pack_start(&remember, false, false, 0);
         area.pack_start(&error, false, false, 0);
         area.pack_start(&note, false, false, 6);
         if let Some(app) = self.app() {
@@ -785,6 +874,11 @@ impl PasswordManager {
                 return;
             }
             let kind = if keepass.is_active() { "keepassxc" } else { "own" };
+            let mode = match remember.active_id().as_deref() {
+                Some("session") => Remember::Session,
+                Some("never") => Remember::Never,
+                _ => Remember::Week,
+            };
             let pass = Zeroizing::new(password.text().to_string());
             if pass.is_empty() {
                 error.set_text("Bitte das Master-Passwort eingeben.");
@@ -827,7 +921,7 @@ impl PasswordManager {
                     let state = vault::file_state(&loc.path);
                     write_index(&hashes, state);
                     secret::forget(Kind::Master);
-                    let store = secret::store(Kind::Master, &check);
+                    let store = if mode == Remember::Week { Some(secret::store(Kind::Master, &check)) } else { None };
                     Ok::<_, String>((hashes, state, key, store, logins.len()))
                 })
                 .await
@@ -835,7 +929,11 @@ impl PasswordManager {
                 dialog.set_sensitive(true);
                 match result {
                     Ok((hashes, state, key, store, count)) => {
-                        me.cache.put(Kind::Master, &pass);
+                        if mode != Remember::Never {
+                            me.cache.put(Kind::Master, &pass);
+                        } else {
+                            me.cache.clear(Kind::Master);
+                        }
                         me.cache.put(Kind::IndexKey, &key);
                         *me.index.borrow_mut() = Index { hashes, state, loaded: true };
                         if let Some(app) = me.app() {
@@ -843,6 +941,7 @@ impl PasswordManager {
                             let keyfile = location.keyfile.as_ref().map(|k| k.to_string_lossy().to_string()).unwrap_or_default();
                             app.set_layout_option(|c| {
                                 c.password_manager = kind.into();
+                                c.pm_remember = mode;
                                 if kind == "keepassxc" {
                                     c.pm_database = path;
                                     c.pm_keyfile = keyfile;
@@ -857,7 +956,14 @@ impl PasswordManager {
                             info_dialog(
                                 &parent,
                                 "Passwortmanager eingerichtet",
-                                &format!("{count} Einträge gefunden.\n\nDas Master-Passwort liegt jetzt {}.", store.describe()),
+                                &format!(
+                                    "{count} Einträge gefunden.\n\n{}",
+                                    match store {
+                                        Some(store) => format!("Das Master-Passwort liegt jetzt {}.", store.describe()),
+                                        None if mode == Remember::Session => "Das Master-Passwort bleibt nur im Arbeitsspeicher, bis du PoeziBrowse schließt.".to_string(),
+                                        None => "Der Passwortmanager bleibt gesperrt und fragt jedes Mal nach dem Master-Passwort.".to_string(),
+                                    }
+                                ),
                             );
                         }
                     }

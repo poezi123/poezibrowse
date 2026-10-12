@@ -29,6 +29,9 @@ pub struct Tab {
     pub page: RefCell<Option<Box<dyn Page>>>,
     pub snapshot: RefCell<Option<Snapshot>>,
     pub last_active: Cell<Instant>,
+    pub crashed_at: Cell<Option<Instant>>,
+    pub last_uri: RefCell<String>,
+    pub last_title: RefCell<String>,
 }
 
 impl Tab {
@@ -43,7 +46,7 @@ impl Tab {
             Mode::Tor => row.style_context().add_class("tor"),
             Mode::Normal => {}
         }
-        let icon = gtk::Image::from_icon_name(Some("text-html-symbolic"), gtk::IconSize::Menu);
+        let icon = gtk::Image::from_icon_name(Some("poezi-page-symbolic"), gtk::IconSize::Menu);
         let spinner = gtk::Spinner::new();
         let title = gtk::Label::new(Some("Neuer Tab"));
         title.set_ellipsize(pango::EllipsizeMode::End);
@@ -85,6 +88,9 @@ impl Tab {
             page: RefCell::new(None),
             snapshot: RefCell::new(None),
             last_active: Cell::new(Instant::now()),
+            crashed_at: Cell::new(None),
+            last_uri: RefCell::new(String::new()),
+            last_title: RefCell::new(String::new()),
         };
         tab
     }
@@ -181,7 +187,7 @@ impl Tab {
                 match page.as_ref().and_then(|p| p.favicon()) {
                 Some(pixbuf) => self.icon.set_from_pixbuf(Some(&pixbuf)),
                 None => self.icon.set_from_icon_name(
-                    Some(if self.is_sleeping() { "weather-clear-night-symbolic" } else { "text-html-symbolic" }),
+                    Some(if self.is_sleeping() { "weather-clear-night-symbolic" } else { "poezi-page-symbolic" }),
                     gtk::IconSize::Menu,
                 ),
                 }
