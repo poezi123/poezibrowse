@@ -160,6 +160,65 @@ pub fn tls_install_command() -> &'static str {
     }
 }
 
+pub fn fonts_install_command() -> &'static str {
+    match family() {
+        Family::Arch => "sudo pacman -S fontconfig ttf-dejavu noto-fonts",
+        Family::Debian => "sudo apt install --reinstall fontconfig-config fonts-dejavu-core fonts-noto-core",
+        Family::Fedora => "sudo dnf install fontconfig dejavu-sans-fonts dejavu-serif-fonts && sudo dnf reinstall fontconfig",
+        Family::Suse => "sudo zypper install -f fontconfig dejavu-fonts",
+        Family::Other => "Paket „fontconfig“ neu installieren und eine Schrift wie DejaVu oder Noto installieren",
+    }
+}
+
+pub fn symbol(name: &str) -> Option<*mut std::ffi::c_void> {
+    unsafe extern "C" {
+        fn dlsym(handle: *mut std::ffi::c_void, symbol: *const std::ffi::c_char) -> *mut std::ffi::c_void;
+    }
+    let name = std::ffi::CString::new(name).ok()?;
+    let p = unsafe { dlsym(std::ptr::null_mut(), name.as_ptr()) };
+    (!p.is_null()).then_some(p)
+}
+
+pub fn fonts_usable() -> bool {
+    type Parse = unsafe extern "C" fn(*const u8) -> *mut std::ffi::c_void;
+    type Substitute = unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, i32) -> i32;
+    type Default = unsafe extern "C" fn(*mut std::ffi::c_void);
+    type GetString = unsafe extern "C" fn(*mut std::ffi::c_void, *const u8, i32, *mut *const u8) -> i32;
+    type Destroy = unsafe extern "C" fn(*mut std::ffi::c_void);
+    let (Some(parse), Some(substitute), Some(default), Some(get), Some(destroy)) = (
+        symbol("FcNameParse"),
+        symbol("FcConfigSubstitute"),
+        symbol("FcDefaultSubstitute"),
+        symbol("FcPatternGetString"),
+        symbol("FcPatternDestroy"),
+    ) else {
+        return true;
+    };
+    unsafe {
+        let parse: Parse = std::mem::transmute(parse);
+        let substitute: Substitute = std::mem::transmute(substitute);
+        let default: Default = std::mem::transmute(default);
+        let get: GetString = std::mem::transmute(get);
+        let destroy: Destroy = std::mem::transmute(destroy);
+        ["serif", "sans-serif"].iter().all(|generic| {
+            let name = format!("{generic}\0");
+            let pattern = parse(name.as_ptr());
+            if pattern.is_null() {
+                return false;
+            }
+            substitute(std::ptr::null_mut(), pattern, 0);
+            default(pattern);
+            let mut families = 0;
+            let mut value = std::ptr::null();
+            while get(pattern, b"family\0".as_ptr(), families, &mut value) == 0 {
+                families += 1;
+            }
+            destroy(pattern);
+            families > 1
+        })
+    }
+}
+
 fn which(program: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|paths| std::env::split_paths(&paths).any(|p| p.join(program).is_file()))
 }
@@ -227,6 +286,7 @@ pub fn diagnose() -> String {
     ));
     out.push_str(&format!("Grafik:        {gpu}\n"));
     out.push_str(&format!("Sandbox:       {}\n", if crate::engine::webkit::sandbox_usable() { "aktiv (bubblewrap)" } else { "aus (bubblewrap fehlt oder darf keine Namespaces anlegen)" }));
+    out.push_str(&format!("Schriften:     {}\n", if fonts_usable() { "ok".to_string() } else { format!("Schrift-Konfiguration kaputt – Seiten stürzen ab. Reparieren: {}", fonts_install_command()) }));
     out.push_str(&format!("HTTPS (TLS):   {}\n", if tls_available() { "ok".to_string() } else { format!("FEHLT – {}", tls_install_command()) }));
     if media.missing.is_empty() {
         out.push_str("Video/Audio:   alle GStreamer-Plugins vorhanden\n");

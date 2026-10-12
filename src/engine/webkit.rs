@@ -105,17 +105,18 @@ impl WebKitEngine {
         });
 
         let settings = Settings::new();
-        settings.set_enable_dns_prefetching(false);
+        settings.set_enable_dns_prefetching(mode == Mode::Normal);
         settings.set_enable_developer_extras(true);
         settings.set_enable_smooth_scrolling(true);
         settings.set_enable_back_forward_navigation_gestures(true);
         settings.set_javascript_can_open_windows_automatically(false);
-        settings.set_enable_page_cache(!config.saver_mode);
+        settings.set_enable_page_cache(true);
         settings.set_hardware_acceleration_policy(if config.hardware_acceleration {
             HardwareAccelerationPolicy::Always
         } else {
             HardwareAccelerationPolicy::Never
         });
+        enable_feature(&settings, "PDFJSViewerEnabled");
         if mode == Mode::Tor {
             settings.set_enable_webrtc(false);
             settings.set_enable_media_stream(false);
@@ -518,6 +519,51 @@ fn handle_permission(view: &WebView, request: &PermissionRequest) -> bool {
     }
     request.deny();
     true
+}
+
+fn enable_feature(settings: &Settings, identifier: &str) -> bool {
+    type AllFeatures = unsafe extern "C" fn() -> *mut std::ffi::c_void;
+    type Length = unsafe extern "C" fn(*mut std::ffi::c_void) -> usize;
+    type Get = unsafe extern "C" fn(*mut std::ffi::c_void, usize) -> *mut std::ffi::c_void;
+    type Identifier = unsafe extern "C" fn(*mut std::ffi::c_void) -> *const std::ffi::c_char;
+    type SetEnabled = unsafe extern "C" fn(*mut webkit2gtk::ffi::WebKitSettings, *mut std::ffi::c_void, i32);
+    type Unref = unsafe extern "C" fn(*mut std::ffi::c_void);
+    use crate::system::symbol;
+    use gtk::glib::translate::ToGlibPtr;
+    let (Some(all), Some(length), Some(get), Some(id), Some(set), Some(unref)) = (
+        symbol("webkit_settings_get_all_features"),
+        symbol("webkit_feature_list_get_length"),
+        symbol("webkit_feature_list_get"),
+        symbol("webkit_feature_get_identifier"),
+        symbol("webkit_settings_set_feature_enabled"),
+        symbol("webkit_feature_list_unref"),
+    ) else {
+        return false;
+    };
+    unsafe {
+        let all: AllFeatures = std::mem::transmute(all);
+        let length: Length = std::mem::transmute(length);
+        let get: Get = std::mem::transmute(get);
+        let id: Identifier = std::mem::transmute(id);
+        let set: SetEnabled = std::mem::transmute(set);
+        let unref: Unref = std::mem::transmute(unref);
+        let list = all();
+        if list.is_null() {
+            return false;
+        }
+        let mut found = false;
+        for i in 0..length(list) {
+            let feature = get(list, i);
+            let name = id(feature);
+            if !name.is_null() && std::ffi::CStr::from_ptr(name).to_bytes() == identifier.as_bytes() {
+                set(settings.to_glib_none().0, feature, 1);
+                found = true;
+                break;
+            }
+        }
+        unref(list);
+        found
+    }
 }
 
 pub fn site_key(uri: &str) -> String {

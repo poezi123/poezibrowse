@@ -133,6 +133,16 @@ impl App {
                 );
                 return;
             }
+            if !crate::system::fonts_usable() {
+                let command = crate::system::fonts_install_command();
+                window.show_prompt(
+                    &format!("Die Schrift-Konfiguration deines Systems ist kaputt (fontconfig findet keine Standardschrift). Viele Seiten stürzen dadurch ab. Reparieren mit: {command}"),
+                    "Befehl kopieren",
+                    "Schließen",
+                    move |copy| copy_text(copy, command),
+                );
+                return;
+            }
             let media = crate::system::media_report();
             if !media.missing.is_empty() && !app.config.borrow().ignore_media_warning {
                 let command = crate::system::media_install_command();

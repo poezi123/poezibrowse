@@ -510,7 +510,7 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         row("RAM-Budget (MB)", "Wird es überschritten, schläft sofort der am längsten unbenutzte Tab ein. 0 = aus", format!("<input type=\"number\" min=\"0\" name=\"ram_budget_mb\" value=\"{}\">", c.ram_budget_mb)),
         row("Tabs pro Prozess *", "Nur Tabs derselben Website teilen sich einen Prozess – so reißt ein Absturz keine anderen Seiten mit", format!("<input type=\"number\" min=\"1\" max=\"50\" name=\"tabs_per_process\" value=\"{}\">", c.tabs_per_process)),
         row("Speicherlimit pro Prozess (MB) *", "Darüber gibt WebKit Caches frei, 0 = Standard", format!("<input type=\"number\" min=\"0\" name=\"memory_limit_mb\" value=\"{}\">", c.memory_limit_mb)),
-        row("RAM-Sparmodus *", "Kleinere Caches, kein Seiten-Cache für Zurück/Vor", format!("<input type=\"checkbox\" name=\"saver_mode\"{}>", checked(c.saver_mode))),
+        row("RAM-Sparmodus *", "Kleinere Caches für Bilder und Skripte", format!("<input type=\"checkbox\" name=\"saver_mode\"{}>", checked(c.saver_mode))),
         row("Werbung und Tracker blockieren *", "EasyList, EasyPrivacy, EasyList Germany", format!("<input type=\"checkbox\" name=\"block_ads\"{}>", checked(c.block_ads))),
         row("Blocker-Ausnahmen", "Eine Domain pro Zeile", format!("<textarea name=\"block_allowlist\">{}</textarea>", escape(&c.block_allowlist.join("\n")))),
         row("Tabs beim Start wiederherstellen", "", format!("<input type=\"checkbox\" name=\"restore_session\"{}>", checked(c.restore_session))),

@@ -4,13 +4,30 @@ use std::fs;
 pub fn total_usage() -> u64 {
     let me = std::process::id();
     let parents = parent_map();
-    let mut total = 0;
+    let mut private = 0;
+    let mut shared = 0;
     for (&pid, _) in parents.iter() {
         if pid == me || is_descendant(pid, me, &parents) {
-            total += pss_of(pid).unwrap_or(0);
+            if let Some((anon, file)) = rss_of(pid) {
+                private += anon;
+                shared = shared.max(file);
+            }
         }
     }
-    total
+    private + shared
+}
+
+fn rss_of(pid: u32) -> Option<(u64, u64)> {
+    let text = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let field = |name: &str| -> u64 {
+        text.lines()
+            .find(|l| l.starts_with(name))
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0)
+            * 1024
+    };
+    Some((field("RssAnon:"), field("RssFile:") + field("RssShmem:")))
 }
 
 pub fn breakdown() -> Vec<(String, u64)> {

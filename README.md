@@ -106,6 +106,7 @@ sha256sum -c SHA256SUMS.txt --ignore-missing
 - Address bar suggestions from favorites and history, search with DuckDuckGo, Startpage, Brave, Ecosia, Qwant or Google
 - Session restore – restored tabs only load when you open them
 - Ctrl + mouse wheel zoom, mouse back/forward buttons, find in page, print, developer tools
+- Built-in PDF viewer (PDF.js) – PDFs open in a tab, also from the file manager
 - Start page wallpapers: presets or your own picture, with dimming and blur
 - Title bar with the animated contour pattern from [PoeziCode](https://github.com/poezi123/poezicode), adjustable frame rate
 - Light, dark or system appearance

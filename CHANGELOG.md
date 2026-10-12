@@ -10,6 +10,9 @@
 - **Master password: new setting "remember"** – 7 days (TPM), until PoeziBrowse is closed, or never: the password manager stays locked and asks for the KeePassXC master password every time.
 - Own fallback icons, so the interface works with every icon theme (e.g. Adwaita 50 without `text-html-symbolic`).
 - `poezibrowse --diagnose` shows WebKitGTK version, sandbox, TLS, missing video plugins and the matching install command; crashes are logged in `~/.cache/poezibrowse/crashes.log`.
+- **PDF viewer:** PDFs open directly in a tab (PDF.js built into WebKitGTK) instead of being downloaded; PoeziBrowse can be chosen to open PDF files.
+- **Broken font configuration is detected:** WebKit crashes on many pages (e.g. Amazon) when fontconfig has no default font. PoeziBrowse checks this on start and shows the repair command.
+- **Smoother:** the RAM display no longer reads `smaps_rollup`, which locked each web process's memory for up to 14 ms every 3 seconds; the back/forward cache is always on, so going back is instant; DNS prefetching in normal tabs.
 - Tested on Garuda, CachyOS, Ubuntu 24.04, Debian 13, Fedora 44 and openSUSE Tumbleweed.
 
 **Deutsch**
@@ -20,6 +23,9 @@
 - **Master-Passwort: neue Einstellung „merken“** – 7 Tage (TPM), bis PoeziBrowse geschlossen wird, oder nie: der Passwortmanager bleibt gesperrt und fragt jedes Mal nach dem KeePassXC-Master-Passwort.
 - Eigene Ersatz-Symbole, damit die Oberfläche mit jedem Icon-Theme funktioniert (z. B. Adwaita 50 ohne `text-html-symbolic`).
 - `poezibrowse --diagnose` zeigt WebKitGTK-Version, Sandbox, TLS, fehlende Video-Plugins und den passenden Installationsbefehl; Abstürze landen in `~/.cache/poezibrowse/crashes.log`.
+- **PDF-Betrachter:** PDFs öffnen sich direkt im Tab (in WebKitGTK eingebautes PDF.js), statt heruntergeladen zu werden; PoeziBrowse kann zum Öffnen von PDF-Dateien gewählt werden.
+- **Kaputte Schrift-Konfiguration wird erkannt:** Findet fontconfig keine Standardschrift, stürzt WebKit auf vielen Seiten ab (z. B. Amazon). PoeziBrowse prüft das beim Start und zeigt den Reparaturbefehl.
+- **Flüssiger:** Die RAM-Anzeige liest nicht mehr `smaps_rollup`, das alle 3 Sekunden den Speicher jedes Web-Prozesses für bis zu 14 ms gesperrt hat; der Zurück/Vor-Cache ist immer an, Zurück geht sofort; DNS-Vorabauflösung in normalen Tabs.
 - Getestet auf Garuda, CachyOS, Ubuntu 24.04, Debian 13, Fedora 44 und openSUSE Tumbleweed.
 
 ## v0.4.0 – first public release / erste öffentliche Version

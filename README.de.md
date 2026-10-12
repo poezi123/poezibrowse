@@ -104,6 +104,7 @@ sha256sum -c SHA256SUMS.txt --ignore-missing
 - Vorschläge in der Adressleiste aus Favoriten und Verlauf, Suche mit DuckDuckGo, Startpage, Brave, Ecosia, Qwant oder Google
 - Sitzung wiederherstellen – wiederhergestellte Tabs laden erst, wenn du sie öffnest
 - Zoom mit Strg + Mausrad, Zurück/Vor mit den Daumentasten der Maus, Suchen auf der Seite, Drucken, Entwicklerwerkzeuge
+- Eingebauter PDF-Betrachter (PDF.js) – PDFs öffnen sich im Tab, auch aus dem Dateimanager
 - Hintergründe für die Startseite: Vorlagen oder eigenes Bild, mit Abdunkeln und Unschärfe
 - Fensterleiste mit dem wandernden Höhenlinien-Muster aus [PoeziCode](https://github.com/poezi123/poezicode), Bildrate einstellbar
 - Hell, Dunkel oder wie das System
