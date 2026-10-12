@@ -19,15 +19,20 @@ use gtk::gio;
 use gtk::prelude::*;
 
 fn main() -> gtk::glib::ExitCode {
+    if system::nvidia() {
+        if std::env::var_os("__NV_DISABLE_EXPLICIT_SYNC").is_none() {
+            unsafe { std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1") };
+        }
+        if system::wayland_session() && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+            unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+        }
+    }
     if std::env::args().nth(1).as_deref() == Some("--diagnose") {
         print!("{}", system::diagnose());
         return gtk::glib::ExitCode::SUCCESS;
     }
     if std::env::args().nth(1).as_deref() == Some(blocker::BUILD_FILTERS_ARG) {
         return if blocker::build_filter_files() { gtk::glib::ExitCode::SUCCESS } else { gtk::glib::ExitCode::FAILURE };
-    }
-    if std::path::Path::new("/proc/driver/nvidia").exists() && std::env::var_os("__NV_DISABLE_EXPLICIT_SYNC").is_none() {
-        unsafe { std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1") };
     }
 
     let gtk_app = gtk::Application::new(Some(config::APP_ID), gio::ApplicationFlags::HANDLES_OPEN);

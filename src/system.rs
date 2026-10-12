@@ -160,6 +160,19 @@ pub fn tls_install_command() -> &'static str {
     }
 }
 
+pub fn nvidia() -> bool {
+    Path::new("/proc/driver/nvidia").exists()
+}
+
+pub fn wayland_session() -> bool {
+    let x11_forced = std::env::var("GDK_BACKEND").is_ok_and(|b| b.starts_with("x11"));
+    !x11_forced && (std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var("XDG_SESSION_TYPE").is_ok_and(|t| t == "wayland"))
+}
+
+pub fn dmabuf_disabled() -> bool {
+    std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_ok_and(|v| v != "0")
+}
+
 pub fn fonts_install_command() -> &'static str {
     match family() {
         Family::Arch => "sudo pacman -S fontconfig ttf-dejavu noto-fonts",
@@ -286,6 +299,10 @@ pub fn diagnose() -> String {
     ));
     out.push_str(&format!("Grafik:        {gpu}\n"));
     out.push_str(&format!("Sandbox:       {}\n", if crate::engine::webkit::sandbox_usable() { "aktiv (bubblewrap)" } else { "aus (bubblewrap fehlt oder darf keine Namespaces anlegen)" }));
+    out.push_str(&format!(
+        "Darstellung:   {}\n",
+        if dmabuf_disabled() { "ohne DMA-BUF (gegen Bildfehler mit NVIDIA unter Wayland)" } else { "DMA-BUF" }
+    ));
     out.push_str(&format!("Schriften:     {}\n", if fonts_usable() { "ok".to_string() } else { format!("Schrift-Konfiguration kaputt – Seiten stürzen ab. Reparieren: {}", fonts_install_command()) }));
     out.push_str(&format!("HTTPS (TLS):   {}\n", if tls_available() { "ok".to_string() } else { format!("FEHLT – {}", tls_install_command()) }));
     if media.missing.is_empty() {

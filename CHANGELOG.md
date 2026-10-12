@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.4.2 – no more tearing on NVIDIA / keine Bildfehler mehr mit NVIDIA
+
+**English**
+
+- **Fixed a horizontal line while scrolling on NVIDIA under Wayland:** PoeziBrowse now shows web pages without WebKit's DMA-BUF renderer on NVIDIA + Wayland, which showed half-drawn frames. Set `WEBKIT_DISABLE_DMABUF_RENDERER=0` to get the old behaviour. `--diagnose` shows which mode is active.
+- Removed the DNS prefetching switch – it does nothing in current WebKitGTK and only printed a warning.
+
+**Deutsch**
+
+- **Waagerechter Strich beim Scrollen mit NVIDIA unter Wayland behoben:** PoeziBrowse zeigt Webseiten auf NVIDIA + Wayland jetzt ohne WebKits DMA-BUF-Renderer an, der halb gezeichnete Bilder angezeigt hat. Mit `WEBKIT_DISABLE_DMABUF_RENDERER=0` gibt es das alte Verhalten. `--diagnose` zeigt, welcher Modus aktiv ist.
+- DNS-Vorabauflösung entfernt – sie tut in aktuellem WebKitGTK nichts und hat nur eine Warnung ausgegeben.
+
 ## v0.4.1 – stability on all distributions / Stabilität auf allen Distributionen
 
 **English**
@@ -12,7 +24,7 @@
 - `poezibrowse --diagnose` shows WebKitGTK version, sandbox, TLS, missing video plugins and the matching install command; crashes are logged in `~/.cache/poezibrowse/crashes.log`.
 - **PDF viewer:** PDFs open directly in a tab (PDF.js built into WebKitGTK) instead of being downloaded; PoeziBrowse can be chosen to open PDF files.
 - **Broken font configuration is detected:** WebKit crashes on many pages (e.g. Amazon) when fontconfig has no default font. PoeziBrowse checks this on start and shows the repair command.
-- **Smoother:** the RAM display no longer reads `smaps_rollup`, which locked each web process's memory for up to 14 ms every 3 seconds; the back/forward cache is always on, so going back is instant; DNS prefetching in normal tabs.
+- **Smoother:** the RAM display no longer reads `smaps_rollup`, which locked each web process's memory for up to 14 ms every 3 seconds; the back/forward cache is always on, so going back is instant.
 - Tested on Garuda, CachyOS, Ubuntu 24.04, Debian 13, Fedora 44 and openSUSE Tumbleweed.
 
 **Deutsch**
@@ -25,7 +37,7 @@
 - `poezibrowse --diagnose` zeigt WebKitGTK-Version, Sandbox, TLS, fehlende Video-Plugins und den passenden Installationsbefehl; Abstürze landen in `~/.cache/poezibrowse/crashes.log`.
 - **PDF-Betrachter:** PDFs öffnen sich direkt im Tab (in WebKitGTK eingebautes PDF.js), statt heruntergeladen zu werden; PoeziBrowse kann zum Öffnen von PDF-Dateien gewählt werden.
 - **Kaputte Schrift-Konfiguration wird erkannt:** Findet fontconfig keine Standardschrift, stürzt WebKit auf vielen Seiten ab (z. B. Amazon). PoeziBrowse prüft das beim Start und zeigt den Reparaturbefehl.
-- **Flüssiger:** Die RAM-Anzeige liest nicht mehr `smaps_rollup`, das alle 3 Sekunden den Speicher jedes Web-Prozesses für bis zu 14 ms gesperrt hat; der Zurück/Vor-Cache ist immer an, Zurück geht sofort; DNS-Vorabauflösung in normalen Tabs.
+- **Flüssiger:** Die RAM-Anzeige liest nicht mehr `smaps_rollup`, das alle 3 Sekunden den Speicher jedes Web-Prozesses für bis zu 14 ms gesperrt hat; der Zurück/Vor-Cache ist immer an, Zurück geht sofort.
 - Getestet auf Garuda, CachyOS, Ubuntu 24.04, Debian 13, Fedora 44 und openSUSE Tumbleweed.
 
 ## v0.4.0 – first public release / erste öffentliche Version

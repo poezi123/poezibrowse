@@ -105,7 +105,6 @@ impl WebKitEngine {
         });
 
         let settings = Settings::new();
-        settings.set_enable_dns_prefetching(mode == Mode::Normal);
         settings.set_enable_developer_extras(true);
         settings.set_enable_smooth_scrolling(true);
         settings.set_enable_back_forward_navigation_gestures(true);
