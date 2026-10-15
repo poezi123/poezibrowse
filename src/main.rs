@@ -24,7 +24,7 @@ fn main() -> gtk::glib::ExitCode {
         if std::env::var_os("__NV_DISABLE_EXPLICIT_SYNC").is_none() {
             unsafe { std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1") };
         }
-        if system::wayland_session() && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        if system::wayland_session() && !system::webkit_at_least(2, 54) && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
             unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
         }
     }

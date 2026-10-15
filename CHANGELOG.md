@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.5.1
+
+- **Fixed YouTube and other video pages crashing on NVIDIA under Wayland with WebKitGTK 2.54:** the DMA-BUF workaround from 0.4.2 makes WebKitGTK 2.54 abort as soon as a page needs accelerated compositing. It is now only used with older WebKitGTK versions.
+- **YouTube und andere Videoseiten stürzen auf NVIDIA unter Wayland mit WebKitGTK 2.54 nicht mehr ab:** Der DMA-BUF-Workaround aus 0.4.2 lässt WebKitGTK 2.54 abbrechen, sobald eine Seite beschleunigtes Compositing braucht. Er wird nur noch bei älteren WebKitGTK-Versionen benutzt.
+
 ## v0.5.0 – built-in Tor bridges / eingebaute Tor-Brücken
 
 **English**

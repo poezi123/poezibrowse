@@ -46,9 +46,9 @@ Telemetrie, nichts läuft im Hintergrund.
 
 | System | Paket | |
 |---|---|---|
-| **Arch Linux**, Garuda, CachyOS, Manjaro, EndeavourOS | `poezibrowse-0.5.0-1-x86_64.pkg.tar.zst` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.0/poezibrowse-0.5.0-1-x86_64.pkg.tar.zst) |
-| **Ubuntu 24.04+**, Debian 13, Linux Mint 22 | `poezibrowse_0.5.0_amd64.deb` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.0/poezibrowse_0.5.0_amd64.deb) |
-| **Jedes andere Linux** (Fedora, openSUSE, …) | `poezibrowse-0.5.0-linux-x64.tar.gz` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.0/poezibrowse-0.5.0-linux-x64.tar.gz) |
+| **Arch Linux**, Garuda, CachyOS, Manjaro, EndeavourOS | `poezibrowse-0.5.1-1-x86_64.pkg.tar.zst` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.1/poezibrowse-0.5.1-1-x86_64.pkg.tar.zst) |
+| **Ubuntu 24.04+**, Debian 13, Linux Mint 22 | `poezibrowse_0.5.1_amd64.deb` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.1/poezibrowse_0.5.1_amd64.deb) |
+| **Jedes andere Linux** (Fedora, openSUSE, …) | `poezibrowse-0.5.1-linux-x64.tar.gz` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.1/poezibrowse-0.5.1-linux-x64.tar.gz) |
 
 Alle Versionen und Prüfsummen (`SHA256SUMS.txt`) stehen auf der
 [Release-Seite](https://github.com/poezi123/poezibrowse/releases).
@@ -63,20 +63,20 @@ also Ubuntu 24.04, Debian 13, Fedora 40 oder jedes aktuelle Arch-basierte System
 **Arch Linux und Ableger**
 
 ```sh
-sudo pacman -U poezibrowse-0.5.0-1-x86_64.pkg.tar.zst
+sudo pacman -U poezibrowse-0.5.1-1-x86_64.pkg.tar.zst
 ```
 
 **Ubuntu, Debian, Linux Mint** – Datei doppelklicken oder:
 
 ```sh
-sudo apt install ./poezibrowse_0.5.0_amd64.deb
+sudo apt install ./poezibrowse_0.5.1_amd64.deb
 ```
 
 **Jede andere Distribution** – zuerst WebKitGTK 4.1 über die Paketverwaltung installieren, dann (ohne Root-Rechte):
 
 ```sh
-tar xzf poezibrowse-0.5.0-linux-x64.tar.gz
-cd poezibrowse-0.5.0-linux-x64
+tar xzf poezibrowse-0.5.1-linux-x64.tar.gz
+cd poezibrowse-0.5.1-linux-x64
 ./install.sh        # trägt PoeziBrowse ins Startmenü ein (~/.local)
 ```
 

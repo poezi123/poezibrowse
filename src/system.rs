@@ -170,6 +170,11 @@ pub fn tls_install_command() -> &'static str {
     }
 }
 
+pub fn webkit_at_least(major: u32, minor: u32) -> bool {
+    let (ma, mi) = unsafe { (webkit2gtk::ffi::webkit_get_major_version(), webkit2gtk::ffi::webkit_get_minor_version()) };
+    (ma, mi) >= (major, minor)
+}
+
 pub fn nvidia() -> bool {
     Path::new("/proc/driver/nvidia").exists()
 }

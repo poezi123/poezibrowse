@@ -48,9 +48,9 @@ The interface is in German for now.
 
 | System | Package | |
 |---|---|---|
-| **Arch Linux**, Garuda, CachyOS, Manjaro, EndeavourOS | `poezibrowse-0.5.0-1-x86_64.pkg.tar.zst` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.0/poezibrowse-0.5.0-1-x86_64.pkg.tar.zst) |
-| **Ubuntu 24.04+**, Debian 13, Linux Mint 22 | `poezibrowse_0.5.0_amd64.deb` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.0/poezibrowse_0.5.0_amd64.deb) |
-| **Any other Linux** (Fedora, openSUSE, …) | `poezibrowse-0.5.0-linux-x64.tar.gz` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.0/poezibrowse-0.5.0-linux-x64.tar.gz) |
+| **Arch Linux**, Garuda, CachyOS, Manjaro, EndeavourOS | `poezibrowse-0.5.1-1-x86_64.pkg.tar.zst` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.1/poezibrowse-0.5.1-1-x86_64.pkg.tar.zst) |
+| **Ubuntu 24.04+**, Debian 13, Linux Mint 22 | `poezibrowse_0.5.1_amd64.deb` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.1/poezibrowse_0.5.1_amd64.deb) |
+| **Any other Linux** (Fedora, openSUSE, …) | `poezibrowse-0.5.1-linux-x64.tar.gz` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.1/poezibrowse-0.5.1-linux-x64.tar.gz) |
 
 All versions and checksums (`SHA256SUMS.txt`) are on the
 [releases page](https://github.com/poezi123/poezibrowse/releases).
@@ -65,20 +65,20 @@ that means Ubuntu 24.04, Debian 13, Fedora 40 or any current Arch-based system.
 **Arch Linux and derivatives**
 
 ```sh
-sudo pacman -U poezibrowse-0.5.0-1-x86_64.pkg.tar.zst
+sudo pacman -U poezibrowse-0.5.1-1-x86_64.pkg.tar.zst
 ```
 
 **Ubuntu, Debian, Linux Mint** – double-click the file, or:
 
 ```sh
-sudo apt install ./poezibrowse_0.5.0_amd64.deb
+sudo apt install ./poezibrowse_0.5.1_amd64.deb
 ```
 
 **Any other distribution** – install WebKitGTK 4.1 with your package manager first, then (no root needed):
 
 ```sh
-tar xzf poezibrowse-0.5.0-linux-x64.tar.gz
-cd poezibrowse-0.5.0-linux-x64
+tar xzf poezibrowse-0.5.1-linux-x64.tar.gz
+cd poezibrowse-0.5.1-linux-x64
 ./install.sh        # adds PoeziBrowse to your app menu (~/.local)
 ```
 
