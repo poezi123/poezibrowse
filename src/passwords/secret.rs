@@ -31,6 +31,7 @@ impl Store {
 pub enum Kind {
     Master,
     IndexKey,
+    CookieKey,
 }
 
 impl Kind {
@@ -38,6 +39,7 @@ impl Kind {
         match self {
             Kind::Master => "poezibrowse-master",
             Kind::IndexKey => "poezibrowse-index-key",
+            Kind::CookieKey => "poezibrowse-cookie-key",
         }
     }
 

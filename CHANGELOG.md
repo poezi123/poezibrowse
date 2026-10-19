@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.7.0 – faster, safer, logins remembered / schneller, sicherer, Logins bleiben
+
+**English**
+
+- **Logins are remembered – encrypted.** WebKit never kept cookies on disk, so you had to sign in again after every restart (e.g. GitHub). PoeziBrowse now saves them itself, encrypted with ChaCha20-Poly1305; the key is sealed with the TPM (systemd-creds) or the system keyring. Nothing is stored in plain text.
+- **About 10 % faster page loads** (measured three times on 12 page loads): leaner cosmetic ad-block rules (only site-specific ones) and the bigger cache are now the default.
+- **New tabs open about three times faster** (75 instead of 237 ms): a web process is kept warm.
+- **Malware and phishing protection** with URLhaus and the Phishing Filter, checked before any request leaves the browser; "open anyway" for the session.
+- **Warning when WebKitGTK is outdated**, with the update command for your distribution (checked at most once a day).
+- **Cookie policy** (third-party cookies blocked by default) and **delete on exit** for cookies, cache and history.
+- **Site permissions** are remembered per site and can be changed or removed in the settings.
+- The about page lists the last page load times.
+- Every new option can be switched in the settings.
+
+**Deutsch**
+
+- **Logins werden gemerkt – verschlüsselt.** WebKit hat Cookies nie dauerhaft gespeichert, deshalb musstest du dich nach jedem Neustart neu anmelden (z. B. bei GitHub). PoeziBrowse speichert sie jetzt selbst, verschlüsselt mit ChaCha20-Poly1305; der Schlüssel ist mit dem TPM-Chip (systemd-creds) oder dem Schlüsselbund gesichert. Nichts liegt im Klartext.
+- **Seiten laden rund 10 % schneller** (dreimal gemessen mit 12 Seitenaufrufen): schlankere Ausblende-Regeln des Werbeblockers (nur seitenspezifische) und der größere Cache sind jetzt Standard.
+- **Neue Tabs öffnen etwa dreimal so schnell** (75 statt 237 ms): ein Web-Prozess wird bereitgehalten.
+- **Schutz vor Schad- und Phishing-Seiten** mit URLhaus und Phishing Filter, geprüft bevor eine Anfrage den Browser verlässt; „Trotzdem öffnen“ für die Sitzung.
+- **Warnung bei veraltetem WebKitGTK** mit dem Update-Befehl für deine Distribution (höchstens einmal am Tag geprüft).
+- **Cookie-Regel** (Drittanbieter-Cookies standardmäßig blockiert) und **Löschen beim Beenden** für Cookies, Cache und Verlauf.
+- **Website-Berechtigungen** werden pro Seite gemerkt und lassen sich in den Einstellungen ändern oder entfernen.
+- Die Seite „Über PoeziBrowse“ zeigt die letzten Ladezeiten.
+- Jede neue Option ist in den Einstellungen schaltbar.
+
 ## v0.6.0 – proxy, fingerprinting protection, user agent / Proxy, Fingerprinting-Schutz, User-Agent
 
 **English**

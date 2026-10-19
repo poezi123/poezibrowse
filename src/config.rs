@@ -82,6 +82,18 @@ pub struct Config {
     pub user_agent: UserAgent,
     pub user_agent_custom: String,
     pub tor_https_only: bool,
+    pub cosmetic_fast: bool,
+    pub prewarm: bool,
+    pub malware_protection: bool,
+    pub webkit_update_check: bool,
+    pub cookie_policy: CookiePolicy,
+    pub remember_logins: bool,
+    pub clear_cookies_on_exit: bool,
+    pub clear_cache_on_exit: bool,
+    pub clear_history_on_exit: bool,
+    pub remember_permissions: bool,
+    pub permissions: Vec<SitePermission>,
+    pub config_version: u32,
     pub ignore_media_warning: bool,
     pub address_suggestions: bool,
 }
@@ -110,6 +122,55 @@ impl BridgeKind {
     pub fn from_id(id: &str) -> Option<BridgeKind> {
         BridgeKind::ALL.into_iter().find(|k| k.id() == id)
     }
+}
+
+pub const CONFIG_VERSION: u32 = 3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CookiePolicy {
+    All,
+    NoThirdParty,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PermissionKind {
+    Camera,
+    Microphone,
+    CameraMicrophone,
+    Location,
+    Notifications,
+}
+
+impl PermissionKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            PermissionKind::Camera => "Kamera",
+            PermissionKind::Microphone => "Mikrofon",
+            PermissionKind::CameraMicrophone => "Kamera und Mikrofon",
+            PermissionKind::Location => "Standort",
+            PermissionKind::Notifications => "Benachrichtigungen",
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            PermissionKind::Camera => "camera",
+            PermissionKind::Microphone => "microphone",
+            PermissionKind::CameraMicrophone => "cameramicrophone",
+            PermissionKind::Location => "location",
+            PermissionKind::Notifications => "notifications",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SitePermission {
+    pub host: String,
+    pub kind: PermissionKind,
+    pub allow: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -225,7 +286,7 @@ impl Default for Config {
             tabs_per_process: 6,
             memory_limit_mb: 1024,
             ram_budget_mb: 1536,
-            saver_mode: true,
+            saver_mode: false,
             block_ads: true,
             block_allowlist: Vec::new(),
             restore_session: true,
@@ -257,6 +318,18 @@ impl Default for Config {
             user_agent: UserAgent::Default,
             user_agent_custom: String::new(),
             tor_https_only: true,
+            cosmetic_fast: true,
+            prewarm: true,
+            malware_protection: true,
+            webkit_update_check: true,
+            cookie_policy: CookiePolicy::NoThirdParty,
+            remember_logins: true,
+            clear_cookies_on_exit: false,
+            clear_cache_on_exit: false,
+            clear_history_on_exit: false,
+            remember_permissions: true,
+            permissions: Vec::new(),
+            config_version: 0,
             ignore_media_warning: false,
             address_suggestions: false,
         }
@@ -288,7 +361,24 @@ impl Config {
         }
         config.tabs_per_process = config.tabs_per_process.max(1);
         config.titlebar_fps = config.titlebar_fps.clamp(1, 60);
+        if config.config_version < CONFIG_VERSION {
+            if config.config_version < 3 {
+                config.saver_mode = false;
+            }
+            config.config_version = CONFIG_VERSION;
+            config.save();
+        }
         config
+    }
+
+    pub fn permission(&self, host: &str, kind: PermissionKind) -> Option<bool> {
+        self.permissions.iter().find(|p| p.host == host && p.kind == kind).map(|p| p.allow)
+    }
+
+    pub fn set_permission(&mut self, host: &str, kind: PermissionKind, allow: bool) {
+        self.permissions.retain(|p| !(p.host == host && p.kind == kind));
+        self.permissions.push(SitePermission { host: host.to_string(), kind, allow });
+        self.permissions.sort_by(|a, b| a.host.cmp(&b.host).then(a.kind.id().cmp(b.kind.id())));
     }
 
     pub fn save(&self) {

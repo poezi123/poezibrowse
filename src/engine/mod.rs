@@ -17,6 +17,7 @@ pub enum PageEvent {
     Fullscreen(bool),
     AudioChanged,
     Crashed(String),
+    Blocked(String),
     CloseRequested,
 }
 

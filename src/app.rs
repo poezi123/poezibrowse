@@ -32,6 +32,7 @@ pub struct App {
     blocker: RefCell<Option<Rc<Blocker>>>,
     pub storage: Storage,
     pub token: String,
+    pub block_exceptions: RefCell<Vec<String>>,
     windows: RefCell<Vec<Rc<BrowserWindow>>>,
     next_tab_id: Cell<u64>,
     session_dirty: Cell<bool>,
@@ -57,6 +58,7 @@ impl App {
             blocker: RefCell::new(None),
             storage: Storage::open(),
             token: random_token(),
+            block_exceptions: RefCell::new(Vec::new()),
             windows: RefCell::new(Vec::new()),
             next_tab_id: Cell::new(1),
             session_dirty: Cell::new(false),
@@ -143,6 +145,22 @@ impl App {
                 );
                 return;
             }
+            if app.config.borrow().webkit_update_check {
+                let window = window.clone();
+                glib::MainContext::default().spawn_local(async move {
+                    let Ok(Some(newer)) = gio::spawn_blocking(crate::system::webkit_update_check).await else { return };
+                    let command = crate::system::system_update_command();
+                    window.show_prompt(
+                        &format!(
+                            "Dein WebKitGTK {} ist veraltet – Version {newer} schließt Sicherheitslücken. Die Engine kommt vom System, aktualisiere es mit: {command}",
+                            crate::system::webkit_version()
+                        ),
+                        "Befehl kopieren",
+                        "Später",
+                        move |copy| copy_text(copy, command),
+                    );
+                });
+            }
             let media = crate::system::media_report();
             if !media.missing.is_empty() && !app.config.borrow().ignore_media_warning {
                 let command = crate::system::media_install_command();
@@ -190,7 +208,11 @@ impl App {
         crate::system::install_fallback_icons();
         self.apply_appearance();
         self.passwords.remember_changed();
-        if self.config.borrow().block_ads {
+        let wants_blocker = {
+            let c = self.config.borrow();
+            c.block_ads || c.malware_protection
+        };
+        if wants_blocker {
             let blocker = Blocker::new();
             blocker.start();
             *self.blocker.borrow_mut() = Some(blocker);
@@ -213,6 +235,7 @@ impl App {
                 app.quitting.set(true);
                 app.save_session();
                 app.tor.stop();
+                app.on_exit_cleanup();
             }
         });
     }
@@ -227,6 +250,24 @@ impl App {
 
     pub fn engines(&self) -> Vec<Rc<WebKitEngine>> {
         [&self.webkit, &self.webkit_private, &self.webkit_tor].iter().filter_map(|s| s.borrow().clone()).collect()
+    }
+
+    fn on_exit_cleanup(&self) {
+        let (cookies, cache, history, remember) = {
+            let c = self.config.borrow();
+            (c.clear_cookies_on_exit, c.clear_cache_on_exit, c.clear_history_on_exit, c.remember_logins)
+        };
+        if cookies || !remember {
+            crate::cookies::forget();
+        } else if let Some(engine) = self.webkit.borrow().as_ref() {
+            engine.save_cookies();
+        }
+        if cache {
+            let _ = std::fs::remove_dir_all(crate::config::cache_dir().join("webkit"));
+        }
+        if history {
+            self.storage.clear_history();
+        }
     }
 
     pub fn apply_proxy(&self) {
@@ -265,11 +306,31 @@ impl App {
         });
         if let Some(blocker) = self.blocker.borrow().clone() {
             let me = self.me.clone();
+            let me2 = self.me.clone();
             engine.set_blocking(Blocking {
                 blocker,
-                enabled_for: Rc::new(move |host| me.upgrade().is_some_and(|app| !app.config.borrow().is_allowlisted(host))),
+                enabled_for: Rc::new(move |host| me.upgrade().is_some_and(|app| app.ads_blocked_for(host))),
+                filters_for: Rc::new(move |host| me2.upgrade().map(|app| app.filters_for(host)).unwrap_or_default()),
             });
         }
+        let (get_app, set_app) = (self.me.clone(), self.me.clone());
+        *engine.permission_store.borrow_mut() = Some(crate::engine::webkit::PermissionStore {
+            get: Rc::new(move |host, kind| {
+                let app = get_app.upgrade()?;
+                let c = app.config.borrow();
+                if c.remember_permissions { c.permission(host, kind) } else { None }
+            }),
+            set: Rc::new(move |host, kind, allow| {
+                if let Some(app) = set_app.upgrade() {
+                    let mut c = app.config.borrow_mut();
+                    if c.remember_permissions {
+                        c.set_permission(host, kind, allow);
+                        c.save();
+                    }
+                }
+            }),
+        });
+        engine.prewarm_soon();
         *slot.borrow_mut() = Some(engine.clone());
         engine
     }
@@ -552,6 +613,33 @@ impl App {
                 engine.release_memory();
             }
             self.memory_released.set(true);
+        }
+    }
+
+    fn exempt(&self, host: &str) -> bool {
+        !host.is_empty() && self.block_exceptions.borrow().iter().any(|h| h == host)
+    }
+
+    pub fn ads_blocked_for(&self, host: &str) -> bool {
+        let c = self.config.borrow();
+        c.block_ads && !c.is_allowlisted(host) && !self.exempt(host)
+    }
+
+    pub fn filters_for(&self, host: &str) -> Vec<&'static str> {
+        let mut ids = Vec::new();
+        if self.ads_blocked_for(host) {
+            ids.push(crate::blocker::NETWORK);
+            ids.push(if self.config.borrow().cosmetic_fast { crate::blocker::COSMETIC_FAST } else { crate::blocker::COSMETIC });
+        }
+        if self.config.borrow().malware_protection && !self.exempt(host) {
+            ids.push(crate::blocker::MALWARE);
+        }
+        ids
+    }
+
+    pub fn allow_blocked_host(&self, host: &str) {
+        if !self.exempt(host) {
+            self.block_exceptions.borrow_mut().push(host.to_string());
         }
     }
 

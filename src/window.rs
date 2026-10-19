@@ -1016,6 +1016,29 @@ impl BrowserWindow {
                     self.window.unfullscreen();
                 }
             }
+            PageEvent::Blocked(uri) => {
+                if is_current {
+                    let host = config::host_of(&uri).unwrap_or_default();
+                    let w = Rc::downgrade(self);
+                    let t = Rc::downgrade(tab);
+                    self.show_prompt(
+                        &format!("{host} wurde blockiert. Nur öffnen, wenn du der Seite wirklich vertraust – die Ausnahme gilt bis zum Beenden."),
+                        "Trotzdem öffnen",
+                        "Nicht öffnen",
+                        move |yes| {
+                            if !yes {
+                                return;
+                            }
+                            if let (Some(w), Some(t)) = (w.upgrade(), t.upgrade()) {
+                                w.app.allow_blocked_host(&host);
+                                if let Some(page) = t.page.borrow().as_ref() {
+                                    page.load_uri(&uri);
+                                }
+                            }
+                        },
+                    );
+                }
+            }
             PageEvent::Crashed(reason) => {
                 let w = Rc::downgrade(self);
                 let t = Rc::downgrade(tab);

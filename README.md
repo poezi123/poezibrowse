@@ -48,9 +48,9 @@ The interface is in German for now.
 
 | System | Package | |
 |---|---|---|
-| **Arch Linux**, Garuda, CachyOS, Manjaro, EndeavourOS | `poezibrowse-0.6.0-1-x86_64.pkg.tar.zst` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.6.0/poezibrowse-0.6.0-1-x86_64.pkg.tar.zst) |
-| **Ubuntu 24.04+**, Debian 13, Linux Mint 22 | `poezibrowse_0.6.0_amd64.deb` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.6.0/poezibrowse_0.6.0_amd64.deb) |
-| **Any other Linux** (Fedora, openSUSE, …) | `poezibrowse-0.6.0-linux-x64.tar.gz` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.6.0/poezibrowse-0.6.0-linux-x64.tar.gz) |
+| **Arch Linux**, Garuda, CachyOS, Manjaro, EndeavourOS | `poezibrowse-0.7.0-1-x86_64.pkg.tar.zst` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.7.0/poezibrowse-0.7.0-1-x86_64.pkg.tar.zst) |
+| **Ubuntu 24.04+**, Debian 13, Linux Mint 22 | `poezibrowse_0.7.0_amd64.deb` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.7.0/poezibrowse_0.7.0_amd64.deb) |
+| **Any other Linux** (Fedora, openSUSE, …) | `poezibrowse-0.7.0-linux-x64.tar.gz` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.7.0/poezibrowse-0.7.0-linux-x64.tar.gz) |
 
 All versions and checksums (`SHA256SUMS.txt`) are on the
 [releases page](https://github.com/poezi123/poezibrowse/releases).
@@ -65,20 +65,20 @@ that means Ubuntu 24.04, Debian 13, Fedora 40 or any current Arch-based system.
 **Arch Linux and derivatives**
 
 ```sh
-sudo pacman -U poezibrowse-0.6.0-1-x86_64.pkg.tar.zst
+sudo pacman -U poezibrowse-0.7.0-1-x86_64.pkg.tar.zst
 ```
 
 **Ubuntu, Debian, Linux Mint** – double-click the file, or:
 
 ```sh
-sudo apt install ./poezibrowse_0.6.0_amd64.deb
+sudo apt install ./poezibrowse_0.7.0_amd64.deb
 ```
 
 **Any other distribution** – install WebKitGTK 4.1 with your package manager first, then (no root needed):
 
 ```sh
-tar xzf poezibrowse-0.6.0-linux-x64.tar.gz
-cd poezibrowse-0.6.0-linux-x64
+tar xzf poezibrowse-0.7.0-linux-x64.tar.gz
+cd poezibrowse-0.7.0-linux-x64
 ./install.sh        # adds PoeziBrowse to your app menu (~/.local)
 ```
 
@@ -110,6 +110,13 @@ sha256sum -c SHA256SUMS.txt --ignore-missing
 - Start page wallpapers: presets or your own picture, with dimming and blur
 - Title bar with the animated contour pattern from [PoeziCode](https://github.com/poezi123/poezicode), adjustable frame rate
 - Light, dark or system appearance
+
+**Security**
+- Logins are remembered, but encrypted: cookies are stored with ChaCha20-Poly1305, the key sits in your PC's TPM (or the system keyring) – never in plain text on disk
+- Protection against malware and phishing sites with open lists (URLhaus, Phishing Filter) – no Google, no telemetry; you can still open a page if you trust it
+- Warning when your WebKitGTK engine misses security updates, with the right update command for your distribution
+- Third-party cookies blocked; optionally delete cookies, cache or history on exit
+- Site permissions (camera, microphone, location, notifications) remembered per site and manageable in the settings
 
 **Privacy**
 - Ad and tracker blocker (EasyList, EasyPrivacy, EasyList Germany), compiled into WebKit's content blocker, updated weekly; switch it off per site with the shield in the address bar

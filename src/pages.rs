@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::config::{self, BridgeKind, Config, Fingerprint, ProxyMode, UserAgent, EngineKind, Theme, SEARCH_ENGINES, WALLPAPER_PRESETS};
+use crate::config::{self, BridgeKind, Config, CookiePolicy, Fingerprint, ProxyMode, UserAgent, EngineKind, Theme, SEARCH_ENGINES, WALLPAPER_PRESETS};
 use crate::memory;
 use crate::storage::{Entry, Shelf};
 
@@ -500,6 +500,29 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
             Some("custom") => c.proxy_mode,
             _ => ProxyMode::System,
         };
+        c.cosmetic_fast = flag("cosmetic_fast");
+        c.prewarm = flag("prewarm");
+        c.malware_protection = flag("malware_protection");
+        c.webkit_update_check = flag("webkit_update_check");
+        c.remember_logins = flag("remember_logins");
+        c.clear_cookies_on_exit = flag("clear_cookies_on_exit");
+        c.clear_cache_on_exit = flag("clear_cache_on_exit");
+        c.clear_history_on_exit = flag("clear_history_on_exit");
+        c.remember_permissions = flag("remember_permissions");
+        c.cookie_policy = match text("cookie_policy").as_deref() {
+            Some("all") => CookiePolicy::All,
+            Some("none") => CookiePolicy::None,
+            _ => CookiePolicy::NoThirdParty,
+        };
+        let old_permissions = std::mem::take(&mut c.permissions);
+        for (i, p) in old_permissions.into_iter().enumerate() {
+            match text(&format!("perm_{i}")).as_deref() {
+                Some("allow") => c.permissions.push(config::SitePermission { allow: true, ..p }),
+                Some("deny") => c.permissions.push(config::SitePermission { allow: false, ..p }),
+                Some("remove") => {}
+                _ => c.permissions.push(p),
+            }
+        }
         c.proxy_ignore = text("proxy_ignore").unwrap_or_default().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
         let bridge_kind = text("tor_bridge_kind").as_deref().and_then(BridgeKind::from_id);
         c.tor_use_bridges = bridge_kind.is_some();
@@ -560,6 +583,8 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         row("Tabs beim Start wiederherstellen", "", format!("<input type=\"checkbox\" name=\"restore_session\"{}>", checked(c.restore_session))),
         row("Videos mit Ton automatisch abspielen *", "", format!("<input type=\"checkbox\" name=\"autoplay_sound\"{}>", checked(c.autoplay_sound))),
         row("Hardwarebeschleunigung *", "", format!("<input type=\"checkbox\" name=\"hardware_acceleration\"{}>", checked(c.hardware_acceleration))),
+        row("Schnelle Werbeblocker-Regeln", "Nur seitenspezifische Ausblende-Regeln – große Seiten bauen spürbar schneller auf, Werbung wird weiter geblockt", format!("<input type=\"checkbox\" name=\"cosmetic_fast\"{}>", checked(c.cosmetic_fast))),
+        row("Neue Tabs vorladen *", "Hält einen Web-Prozess bereit, damit neue Tabs sofort starten (ca. 60 MB RAM)", format!("<input type=\"checkbox\" name=\"prewarm\"{}>", checked(c.prewarm))),
         row("Vorschläge in der Adressleiste", "Zeigt beim Tippen passende Favoriten und Seiten aus dem Verlauf", format!("<input type=\"checkbox\" name=\"address_suggestions\"{}>", checked(c.address_suggestions))),
         row("Hinweis auf fehlende Video-Plugins ausblenden", "", format!("<input type=\"checkbox\" name=\"ignore_media_warning\"{}>", checked(c.ignore_media_warning))),
         row("Standard-Zoom (%)", "", format!("<input type=\"number\" min=\"30\" max=\"300\" name=\"default_zoom\" value=\"{}\">", (c.default_zoom * 100.0).round())),
@@ -699,6 +724,71 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         ),
         row("Ohne Proxy", "Eine Adresse pro Zeile, z. B. localhost oder 192.168.0.0/16", format!("<textarea name=\"proxy_ignore\">{}</textarea>", escape(&c.proxy_ignore.join("\n")))),
     ];
+    let permission_rows: String = if c.permissions.is_empty() {
+        row("Gemerkte Berechtigungen", "Noch keine – sobald du einer Seite etwas erlaubst oder verbietest, steht es hier", String::new())
+    } else {
+        c.permissions
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                row(
+                    &escape(&p.host),
+                    p.kind.label(),
+                    select(&format!("perm_{i}"), &[
+                        ("allow", "Erlaubt", p.allow),
+                        ("deny", "Blockiert", !p.allow),
+                        ("remove", "Entfernen – beim nächsten Mal fragen", false),
+                    ]),
+                )
+            })
+            .collect()
+    };
+    let security_rows = [
+        row(
+            "Logins merken",
+            "Cookies werden verschlüsselt gespeichert (ChaCha20-Poly1305, Schlüssel im TPM-Chip bzw. Schlüsselbund) – nie im Klartext auf der Festplatte. So bleibst du z. B. bei GitHub angemeldet",
+            format!("<input type=\"checkbox\" name=\"remember_logins\"{}>", checked(c.remember_logins)),
+        ),
+        row(
+            "Cookies *",
+            "Drittanbieter-Cookies sind der Hauptweg, auf dem Werbefirmen dich über Seiten hinweg verfolgen",
+            select("cookie_policy", &[
+                ("nothirdparty", "Drittanbieter-Cookies blockieren (empfohlen)", c.cookie_policy == CookiePolicy::NoThirdParty),
+                ("all", "Alle erlauben", c.cookie_policy == CookiePolicy::All),
+                ("none", "Alle blockieren – Logins funktionieren dann nicht", c.cookie_policy == CookiePolicy::None),
+            ]),
+        ),
+        row(
+            "Beim Beenden löschen",
+            "Was PoeziBrowse beim Schließen wegwirft",
+            format!(
+                "<label><input type=\"checkbox\" name=\"clear_cookies_on_exit\"{}> Cookies und Logins</label><br>\
+                 <label><input type=\"checkbox\" name=\"clear_cache_on_exit\"{}> Cache</label><br>\
+                 <label><input type=\"checkbox\" name=\"clear_history_on_exit\"{}> Verlauf</label>",
+                checked(c.clear_cookies_on_exit),
+                checked(c.clear_cache_on_exit),
+                checked(c.clear_history_on_exit)
+            ),
+        ),
+        row(
+            "Schutz vor Schadseiten",
+            "Blockiert bekannte Malware- und Phishing-Seiten (URLhaus, Phishing Filter – offene Listen, ohne Google, ohne Telemetrie). Du kannst eine Seite trotzdem öffnen",
+            format!("<input type=\"checkbox\" name=\"malware_protection\"{}>", checked(c.malware_protection)),
+        ),
+        row(
+            "Warnen, wenn WebKit veraltet ist",
+            &format!(
+                "Prüft einmal am Tag auf webkitgtk.org, ob es für deine Engine (WebKitGTK {}) Sicherheitsupdates gibt",
+                crate::system::webkit_version()
+            ),
+            format!("<input type=\"checkbox\" name=\"webkit_update_check\"{}>", checked(c.webkit_update_check)),
+        ),
+        row(
+            "Website-Berechtigungen merken",
+            "Kamera, Mikrofon, Standort und Benachrichtigungen pro Seite merken statt jedes Mal zu fragen",
+            format!("<input type=\"checkbox\" name=\"remember_permissions\"{}>", checked(c.remember_permissions)),
+        ),
+    ];
     let password_rows = [
         row("Passwortmanager", "KeePassXC-Datenbank oder eigener Manager", escape(&app.passwords.status_text())),
         row(
@@ -764,6 +854,8 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
              <h2>Erscheinungsbild</h2><div class=\"settings\">{}</div>\
              <h2 id=\"hintergrund\">Hintergrund</h2><div class=\"settings\">{}</div>\
              <h2 id=\"privatsphaere\">Privatsphäre</h2><div class=\"settings\">{}</div>\
+             <h2 id=\"sicherheit\">Sicherheit</h2><div class=\"settings\">{}</div>\
+             <h2 id=\"berechtigungen\">Website-Berechtigungen</h2><div class=\"settings\">{}</div>\
              <h2 id=\"tor\">Tor-Modus</h2><div class=\"settings\">{}</div>\
              <h2 id=\"passwoerter\">Passwörter</h2><div class=\"settings\">{}</div>\
              <h2>Browser</h2><div class=\"settings\">{}</div>\
@@ -772,6 +864,8 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
             appearance.concat(),
             wallpaper_rows.concat(),
             privacy_rows.concat(),
+            security_rows.concat(),
+            permission_rows,
             tor_rows.concat(),
             password_rows.concat(),
             rows.concat()
@@ -804,6 +898,7 @@ fn about_page(app: &App) -> String {
                <tr><td>Tabs schlafen nach</td><td>{}</td></tr>\
                <tr><td>Tabs pro Prozess</td><td>{}</td></tr>\
                <tr><td>RAM-Budget</td><td>{}</td></tr></table>\
+             <h2>Letzte Ladezeiten</h2>{}\
              <p class=\"muted\" style=\"margin-top:28px\">Quellcode: <a href=\"https://github.com/poezi123/poezibrowse\">github.com/poezi123/poezibrowse</a></p>",
             config::VERSION,
             c.engine.label(),
@@ -811,6 +906,20 @@ fn about_page(app: &App) -> String {
             if c.tab_sleep_minutes == 0 { "nie".to_string() } else { format!("{} min", c.tab_sleep_minutes) },
             c.tabs_per_process,
             if c.ram_budget_mb == 0 { "aus".to_string() } else { format!("{} MB", c.ram_budget_mb) },
+            {
+                let times = crate::engine::webkit::load_times();
+                if times.is_empty() {
+                    "<p class=\"muted\">Noch keine Seite geladen.</p>".to_string()
+                } else {
+                    format!(
+                        "<table class=\"stats\">{}</table>",
+                        times
+                            .iter()
+                            .map(|(uri, ms)| format!("<tr><td>{}</td><td>{:.1} s</td></tr>", escape(&config::host_of(uri).unwrap_or_else(|| uri.clone())), *ms as f64 / 1000.0))
+                            .collect::<String>()
+                    )
+                }
+            },
         ),
     )
 }

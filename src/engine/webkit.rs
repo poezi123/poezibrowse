@@ -18,7 +18,7 @@ use webkit2gtk::{
 
 use super::{EventSink, Page, PageEvent, SinkSlot};
 use crate::blocker::{self, Blocker};
-use crate::config::{self, Config, EngineKind, Fingerprint, Mode, ProxyMode};
+use crate::config::{self, Config, EngineKind, Fingerprint, Mode, PermissionKind, ProxyMode};
 
 pub type SchemeHandler = Rc<dyn Fn(&str) -> (String, Vec<u8>)>;
 
@@ -38,12 +38,17 @@ pub struct WebKitEngine {
     tor_port: u16,
     fingerprint_script: Option<webkit2gtk::UserScript>,
     tor_https_only: bool,
+    prewarm: bool,
+    spare: RefCell<Option<(WebView, UserContentManager)>>,
+    cookies: Option<Rc<crate::cookies::Keeper>>,
+    pub permission_store: RefCell<Option<PermissionStore>>,
 }
 
 #[derive(Clone)]
 pub struct Blocking {
     pub blocker: Rc<Blocker>,
     pub enabled_for: Rc<dyn Fn(&str) -> bool>,
+    pub filters_for: Rc<dyn Fn(&str) -> Vec<&'static str>>,
 }
 
 impl WebKitEngine {
@@ -72,6 +77,18 @@ impl WebKitEngine {
         } else {
             apply_proxy(&data_manager, config);
         }
+        #[allow(deprecated)]
+        let cookie_manager = data_manager.cookie_manager();
+        let cookies = cookie_manager.and_then(|manager| {
+            use webkit2gtk::{CookieAcceptPolicy, CookieManagerExt};
+            manager.set_accept_policy(match (mode, config.cookie_policy) {
+                (Mode::Tor, _) => CookieAcceptPolicy::NoThirdParty,
+                (_, config::CookiePolicy::All) => CookieAcceptPolicy::Always,
+                (_, config::CookiePolicy::NoThirdParty) => CookieAcceptPolicy::NoThirdParty,
+                (_, config::CookiePolicy::None) => CookieAcceptPolicy::Never,
+            });
+            (mode == Mode::Normal && config.remember_logins && crate::cookies::supported()).then(|| crate::cookies::Keeper::new(manager))
+        });
         let fingerprint = config.fingerprint_for(mode);
         let strict = fingerprint == Fingerprint::Strict;
 
@@ -186,6 +203,10 @@ impl WebKitEngine {
             tor_port,
             fingerprint_script,
             tor_https_only: config.tor_https_only,
+            prewarm: config.prewarm && mode == Mode::Normal,
+            spare: RefCell::new(None),
+            cookies,
+            permission_store: RefCell::new(None),
         })
     }
 
@@ -257,13 +278,16 @@ impl WebKitEngine {
 
     pub fn set_blocking(self: &Rc<Self>, blocking: Blocking) {
         let me = Rc::downgrade(self);
-        blocking.blocker.connect_ready(move |filters| {
-            let Some(me) = me.upgrade() else { return };
+        let blocker = Rc::downgrade(&blocking.blocker);
+        let filters_for = blocking.filters_for.clone();
+        blocking.blocker.connect_ready(move || {
+            let (Some(me), Some(blocker)) = (me.upgrade(), blocker.upgrade()) else { return };
+            let filters = blocker.select(&filters_for(""));
             let mut managers = me.managers.borrow_mut();
             managers.retain(|w| w.upgrade().is_some());
             for ucm in managers.iter().filter_map(|w| w.upgrade()) {
                 blocker::remove_filters(&ucm);
-                for filter in filters {
+                for filter in &filters {
                     blocker::add_filter(&ucm, filter);
                 }
             }
@@ -271,16 +295,19 @@ impl WebKitEngine {
         *self.blocking.borrow_mut() = Some(blocking);
     }
 
+    pub fn is_dangerous(&self, uri: &str) -> bool {
+        let Some(blocking) = self.blocking.borrow().clone() else { return false };
+        let Some(host) = config::host_of(uri) else { return false };
+        (blocking.filters_for)(&host).contains(&blocker::MALWARE) && blocking.blocker.is_dangerous(&host)
+    }
+
     fn update_blocking(&self, ucm: &UserContentManager, uri: &str) {
         let Some(blocking) = self.blocking.borrow().clone() else { return };
         let host = config::host_of(uri).unwrap_or_default();
         blocker::remove_filters(ucm);
-        let enabled = (blocking.enabled_for)(&host);
-        self.youtube.apply(ucm, enabled);
-        if enabled {
-            for filter in blocking.blocker.filters.borrow().iter() {
-                blocker::add_filter(ucm, filter);
-            }
+        self.youtube.apply(ucm, (blocking.enabled_for)(&host));
+        for filter in blocking.blocker.select(&(blocking.filters_for)(&host)) {
+            blocker::add_filter(ucm, &filter);
         }
     }
 
@@ -291,17 +318,68 @@ impl WebKitEngine {
             webkit2gtk::UserContentManagerExt::add_script(&ucm, script);
         }
         if let Some(blocking) = self.blocking.borrow().as_ref() {
-            for filter in blocking.blocker.filters.borrow().iter() {
-                blocker::add_filter(&ucm, filter);
+            for filter in blocking.blocker.select(&(blocking.filters_for)("")) {
+                blocker::add_filter(&ucm, &filter);
             }
-            self.youtube.apply(&ucm, true);
+            self.youtube.apply(&ucm, (blocking.enabled_for)(""));
         }
         self.managers.borrow_mut().push(ucm.downgrade());
         ucm
     }
 
+    pub fn save_cookies(&self) {
+        if let Some(keeper) = &self.cookies {
+            keeper.save_now();
+        }
+    }
+
+    pub fn prewarm_soon(self: &Rc<Self>) {
+        if !self.prewarm {
+            return;
+        }
+        let me = Rc::downgrade(self);
+        glib::timeout_add_local_once(std::time::Duration::from_millis(1500), move || {
+            let Some(me) = me.upgrade() else { return };
+            if me.spare.borrow().is_some() {
+                return;
+            }
+            let ucm = me.new_content_manager();
+            let view = WebView::builder()
+                .user_content_manager(&ucm)
+                .settings(&me.settings)
+                .website_policies(&me.policies)
+                .web_context(&me.context)
+                .build();
+            view.load_uri("about:blank");
+            *me.spare.borrow_mut() = Some((view, ucm));
+        });
+    }
+
     pub fn create_page(self: &Rc<Self>, related: Option<&WebView>, uri: &str) -> Rc<WebKitPage> {
         let site = site_key(uri);
+        if related.is_none() {
+            let (partner, group) = self.process_partner(&site);
+            if partner.is_none() {
+                let spare = self.spare.borrow_mut().take();
+                if let Some((spare, _)) = spare {
+                    let ucm = self.new_content_manager();
+                    let view = WebView::builder()
+                        .user_content_manager(&ucm)
+                        .settings(&self.settings)
+                        .website_policies(&self.policies)
+                        .related_view(&spare)
+                        .build();
+                    drop(spare);
+                    self.register_in_group(&view, group);
+                    if let Some(hook) = self.content_manager_hook.borrow().clone() {
+                        hook(&ucm, &view);
+                    }
+                    self.prewarm_soon();
+                    return WebKitPage::new(self.clone(), view, ucm);
+                }
+            }
+            self.process_groups.borrow_mut().retain(|g| !g.1.is_empty());
+        }
         let ucm = self.new_content_manager();
         let builder = WebView::builder()
             .user_content_manager(&ucm)
@@ -376,7 +454,22 @@ impl WebKitPage {
         let s = sink.clone();
         let engine = Rc::downgrade(&self.engine);
         let ucm = self.content_manager.clone();
+        let started: std::cell::Cell<Option<std::time::Instant>> = std::cell::Cell::new(None);
+        let created = std::cell::Cell::new(Some(std::time::Instant::now()));
         v.connect_load_changed(move |view, event| {
+            if event == LoadEvent::Started {
+                started.set(Some(std::time::Instant::now()));
+            }
+            if event == LoadEvent::Finished && std::env::var_os("POEZIBROWSE_TIMING").is_some() {
+                if let Some(t) = created.take() {
+                    eprintln!("poezibrowse-timing-tab {} {}", t.elapsed().as_millis(), view.uri().unwrap_or_default());
+                }
+            }
+            if event == LoadEvent::Finished {
+                if let (Some(t), Some(uri)) = (started.take(), view.uri()) {
+                    record_load_time(&uri, t.elapsed());
+                }
+            }
             if matches!(event, LoadEvent::Started | LoadEvent::Redirected) {
                 if let (Some(engine), Some(uri)) = (engine.upgrade(), view.uri()) {
                     engine.update_blocking(&ucm, &uri);
@@ -430,7 +523,25 @@ impl WebKitPage {
         let s = sink.clone();
         let tor = self.engine.mode == Mode::Tor;
         let https_only = tor && self.engine.tor_https_only;
-        v.connect_decide_policy(move |view, decision, kind| decide_policy(&s, view, decision, kind, tor, https_only));
+        let engine = Rc::downgrade(&self.engine);
+        v.connect_decide_policy(move |view, decision, kind| {
+            if matches!(kind, PolicyDecisionType::NavigationAction | PolicyDecisionType::NewWindowAction) {
+                let target = decision
+                    .downcast_ref::<NavigationPolicyDecision>()
+                    .and_then(|n| n.navigation_action())
+                    .and_then(|a| a.request())
+                    .and_then(|r| r.uri())
+                    .map(|u| u.to_string())
+                    .unwrap_or_default();
+                if !showing_blocked(&target) && engine.upgrade().is_some_and(|e| e.is_dangerous(&target)) {
+                    decision.ignore();
+                    show_blocked(view, &target, true);
+                    s.emit(PageEvent::Blocked(target));
+                    return true;
+                }
+            }
+            decide_policy(&s, view, decision, kind, tor, https_only)
+        });
 
         v.connect_button_press_event(|view, event| match event.button() {
             8 => {
@@ -494,7 +605,23 @@ impl WebKitPage {
             false
         });
 
-        v.connect_permission_request(|view, request| handle_permission(view, request));
+        let engine = Rc::downgrade(&self.engine);
+        v.connect_permission_request(move |view, request| {
+            let Some(engine) = engine.upgrade() else { return false };
+            let store = engine.permission_store.borrow().clone();
+            handle_permission(view, request, engine.mode, store)
+        });
+
+        let s = sink.clone();
+        v.connect_load_failed(move |view, _, uri, error| {
+            let message = error.message().to_ascii_lowercase();
+            if !message.contains("content blocker") {
+                return false;
+            }
+            show_blocked(view, uri, false);
+            s.emit(PageEvent::Blocked(uri.to_string()));
+            true
+        });
 
         v.connect_load_failed_with_tls_errors(|view, uri, _cert, _flags| {
             let host = config::host_of(uri).unwrap_or_default();
@@ -506,6 +633,62 @@ impl WebKitPage {
             true
         });
     }
+}
+
+thread_local! {
+    static LOAD_TIMES: RefCell<std::collections::VecDeque<(String, u128)>> = const { RefCell::new(std::collections::VecDeque::new()) };
+}
+
+fn record_load_time(uri: &str, elapsed: std::time::Duration) {
+    if uri.starts_with("poezi:") || uri == "about:blank" {
+        return;
+    }
+    let ms = elapsed.as_millis();
+    if std::env::var_os("POEZIBROWSE_TIMING").is_some() {
+        eprintln!("poezibrowse-timing {ms} {uri}");
+    }
+    LOAD_TIMES.with(|t| {
+        let mut t = t.borrow_mut();
+        t.push_front((uri.to_string(), ms));
+        t.truncate(15);
+    });
+}
+
+pub fn load_times() -> Vec<(String, u128)> {
+    LOAD_TIMES.with(|t| t.borrow().iter().cloned().collect())
+}
+
+thread_local! {
+    static SHOWING_BLOCKED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+fn showing_blocked(uri: &str) -> bool {
+    SHOWING_BLOCKED.with(|s| {
+        let mut s = s.borrow_mut();
+        let found = s.iter().position(|u| u == uri);
+        if let Some(i) = found {
+            s.remove(i);
+        }
+        found.is_some()
+    })
+}
+
+fn show_blocked(view: &WebView, uri: &str, dangerous: bool) {
+    SHOWING_BLOCKED.with(|s| s.borrow_mut().push(uri.to_string()));
+    let host = config::host_of(uri).unwrap_or_default();
+    let html = crate::pages::error_page(
+        "Seite blockiert",
+        &format!(
+            "PoeziBrowse hat <b>{}</b> blockiert. {}",
+            crate::pages::escape(&host),
+            if dangerous {
+                "Die Adresse steht auf einer Liste bekannter Schad- und Phishing-Seiten (URLhaus, Phishing Filter). Solche Seiten verbreiten Viren oder stehlen Passwörter."
+            } else {
+                "Die Adresse steht auf einer Liste von Werbe- oder Tracking-Seiten."
+            }
+        ),
+    );
+    view.load_alternate_html(&html, uri, None);
 }
 
 fn needs_https(uri: &str) -> bool {
@@ -566,42 +749,77 @@ fn decide_policy(sink: &SinkSlot, view: &WebView, decision: &PolicyDecision, kin
     }
 }
 
-fn handle_permission(view: &WebView, request: &PermissionRequest) -> bool {
-    use webkit2gtk::{PermissionRequestExt, PointerLockPermissionRequest, UserMediaPermissionRequest};
+#[derive(Clone)]
+pub struct PermissionStore {
+    pub get: Rc<dyn Fn(&str, PermissionKind) -> Option<bool>>,
+    pub set: Rc<dyn Fn(&str, PermissionKind, bool)>,
+}
+
+fn handle_permission(view: &WebView, request: &PermissionRequest, mode: Mode, store: Option<PermissionStore>) -> bool {
+    use webkit2gtk::{GeolocationPermissionRequest, NotificationPermissionRequest, PermissionRequestExt, PointerLockPermissionRequest, UserMediaPermissionRequest};
     if request.is::<PointerLockPermissionRequest>() {
         request.allow();
         return true;
     }
-    if let Some(media) = request.downcast_ref::<UserMediaPermissionRequest>() {
+    let kind = if let Some(media) = request.downcast_ref::<UserMediaPermissionRequest>() {
         use webkit2gtk::UserMediaPermissionRequestExt;
-        let what = match (media.is_for_audio_device(), media.is_for_video_device()) {
-            (true, true) => "Kamera und Mikrofon",
-            (false, true) => "die Kamera",
-            _ => "das Mikrofon",
-        };
-        let host = view.uri().and_then(|u| config::host_of(&u)).unwrap_or_default();
-        let parent = view.toplevel().and_then(|w| w.downcast::<gtk::Window>().ok());
-        let dialog = gtk::MessageDialog::new(
-            parent.as_ref(),
-            gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
-            gtk::MessageType::Question,
-            gtk::ButtonsType::None,
-            &format!("{host} möchte auf {what} zugreifen."),
-        );
-        dialog.add_buttons(&[("Ablehnen", gtk::ResponseType::Reject), ("Erlauben", gtk::ResponseType::Accept)]);
-        let request = request.clone();
-        dialog.connect_response(move |d, response| {
-            if response == gtk::ResponseType::Accept {
-                request.allow();
-            } else {
-                request.deny();
-            }
-            d.close();
-        });
-        dialog.show_all();
+        match (media.is_for_audio_device(), media.is_for_video_device()) {
+            (true, true) => PermissionKind::CameraMicrophone,
+            (false, true) => PermissionKind::Camera,
+            _ => PermissionKind::Microphone,
+        }
+    } else if request.is::<GeolocationPermissionRequest>() {
+        PermissionKind::Location
+    } else if request.is::<NotificationPermissionRequest>() {
+        PermissionKind::Notifications
+    } else {
+        request.deny();
+        return true;
+    };
+    if mode == Mode::Tor {
+        request.deny();
         return true;
     }
-    request.deny();
+    let host = view.uri().and_then(|u| config::host_of(&u)).unwrap_or_default();
+    let store = store.filter(|_| mode == Mode::Normal && !host.is_empty());
+    if let Some(allow) = store.as_ref().and_then(|s| (s.get)(&host, kind)) {
+        if allow {
+            request.allow();
+        } else {
+            request.deny();
+        }
+        return true;
+    }
+    let parent = view.toplevel().and_then(|w| w.downcast::<gtk::Window>().ok());
+    let dialog = gtk::MessageDialog::new(
+        parent.as_ref(),
+        gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
+        gtk::MessageType::Question,
+        gtk::ButtonsType::None,
+        &format!("{host} möchte {} nutzen.", kind.label()),
+    );
+    let remember = gtk::CheckButton::with_label("Entscheidung für diese Seite merken");
+    remember.set_active(true);
+    if store.is_some() {
+        dialog.message_area().downcast::<gtk::Box>().ok().inspect(|area| area.pack_start(&remember, false, false, 6));
+    }
+    dialog.add_buttons(&[("Ablehnen", gtk::ResponseType::Reject), ("Erlauben", gtk::ResponseType::Accept)]);
+    let request = request.clone();
+    dialog.connect_response(move |d, response| {
+        let allow = response == gtk::ResponseType::Accept;
+        if allow {
+            request.allow();
+        } else {
+            request.deny();
+        }
+        if remember.is_active() && matches!(response, gtk::ResponseType::Accept | gtk::ResponseType::Reject) {
+            if let Some(store) = &store {
+                (store.set)(&host, kind, allow);
+            }
+        }
+        d.close();
+    });
+    dialog.show_all();
     true
 }
 

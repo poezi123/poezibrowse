@@ -269,6 +269,74 @@ pub fn log_crash(uri: &str, reason: &str) {
     }
 }
 
+pub fn system_update_command() -> &'static str {
+    if os_release().0 == "garuda" {
+        return "garuda-update";
+    }
+    match family() {
+        Family::Arch => "sudo pacman -Syu",
+        Family::Debian => "sudo apt update && sudo apt upgrade",
+        Family::Fedora => "sudo dnf upgrade --refresh",
+        Family::Suse => "sudo zypper update",
+        Family::Other => "System über die Paketverwaltung aktualisieren",
+    }
+}
+
+fn installed_webkit() -> (u32, u32, u32) {
+    unsafe {
+        (
+            webkit2gtk::ffi::webkit_get_major_version(),
+            webkit2gtk::ffi::webkit_get_minor_version(),
+            webkit2gtk::ffi::webkit_get_micro_version(),
+        )
+    }
+}
+
+pub fn parse_releases(html: &str) -> Vec<(u32, u32, u32)> {
+    let mut found: Vec<(u32, u32, u32)> = html
+        .split("WebKitGTK ")
+        .skip(1)
+        .filter_map(|part| {
+            let version = part.split_whitespace().next()?;
+            if !part[version.len()..].trim_start().starts_with("released") {
+                return None;
+            }
+            let mut n = version.split('.').map(|x| x.parse::<u32>().ok());
+            let v = (n.next()??, n.next()??, n.next()??);
+            (v.1 % 2 == 0).then_some(v)
+        })
+        .collect();
+    found.sort_unstable();
+    found.dedup();
+    found
+}
+
+pub fn webkit_advice(installed: (u32, u32, u32), releases: &[(u32, u32, u32)]) -> Option<String> {
+    let same = releases.iter().filter(|v| v.0 == installed.0 && v.1 == installed.1).max()?;
+    if same.2 > installed.2 {
+        return Some(format!("{}.{}.{}", same.0, same.1, same.2));
+    }
+    let newest = releases.iter().max()?;
+    (newest.0 == installed.0 && newest.1 >= installed.1 + 4).then(|| format!("{}.{}.{}", newest.0, newest.1, newest.2))
+}
+
+pub fn webkit_update_check() -> Option<String> {
+    let cache = config::cache_dir().join("webkit-releases.html");
+    let fresh = std::fs::metadata(&cache)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age < std::time::Duration::from_secs(24 * 60 * 60));
+    let html = if fresh {
+        std::fs::read_to_string(&cache).ok()?
+    } else {
+        let html = crate::blocker::download("https://webkitgtk.org/news.html").ok()?;
+        let _ = config::write_private(&cache, html.as_bytes());
+        html
+    };
+    webkit_advice(installed_webkit(), &parse_releases(&html))
+}
+
 pub fn webkit_version() -> String {
     unsafe {
         format!(
@@ -354,6 +422,17 @@ mod tests {
             assert!(text.contains("<svg"), "{name}");
         }
         assert!(ICONS.iter().any(|(n, _)| *n == "poezi-page-symbolic"));
+    }
+
+    #[test]
+    fn webkit_releases() {
+        let html = "WebKitGTK 2.54.1 released! WebKitGTK 2.53.92 released WebKitGTK 2.52.6 released WebKitGTK 2.50.4 released";
+        let r = parse_releases(html);
+        assert_eq!(r, vec![(2, 50, 4), (2, 52, 6), (2, 54, 1)]);
+        assert_eq!(webkit_advice((2, 52, 4), &r).as_deref(), Some("2.52.6"));
+        assert_eq!(webkit_advice((2, 54, 1), &r), None);
+        assert_eq!(webkit_advice((2, 52, 6), &r), None);
+        assert_eq!(webkit_advice((2, 50, 4), &r).as_deref(), Some("2.54.1"));
     }
 
     #[test]

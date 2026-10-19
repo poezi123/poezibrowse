@@ -1,4 +1,4 @@
-mod secret;
+pub mod secret;
 mod vault;
 
 use std::cell::RefCell;
