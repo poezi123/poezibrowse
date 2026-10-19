@@ -75,6 +75,13 @@ pub struct Config {
     pub pm_database: String,
     pub pm_keyfile: String,
     pub pm_remember: Remember,
+    pub proxy_mode: ProxyMode,
+    pub proxy_url: String,
+    pub proxy_ignore: Vec<String>,
+    pub fingerprint: Fingerprint,
+    pub user_agent: UserAgent,
+    pub user_agent_custom: String,
+    pub tor_https_only: bool,
     pub ignore_media_warning: bool,
     pub address_suggestions: bool,
 }
@@ -102,6 +109,71 @@ impl BridgeKind {
 
     pub fn from_id(id: &str) -> Option<BridgeKind> {
         BridgeKind::ALL.into_iter().find(|k| k.id() == id)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProxyMode {
+    System,
+    None,
+    Custom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Fingerprint {
+    Off,
+    Standard,
+    Strict,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UserAgent {
+    Default,
+    Safari,
+    Chrome,
+    Firefox,
+    Custom,
+}
+
+pub const SAFARI_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
+pub const CHROME_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
+pub const FIREFOX_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:157.0) Gecko/20100101 Firefox/157.0";
+
+pub fn valid_proxy_url(url: &str) -> bool {
+    let Some((scheme, rest)) = url.split_once("://") else { return false };
+    let authority = rest.trim_end_matches('/');
+    ["http", "https", "socks", "socks4", "socks4a", "socks5"].contains(&scheme)
+        && !authority.is_empty()
+        && !authority.contains(['/', ' ', '\n', '\r'])
+        && authority.rsplit_once(':').is_some_and(|(host, port)| !host.is_empty() && port.parse::<u16>().is_ok_and(|p| p > 0))
+}
+
+impl Config {
+    pub fn user_agent_for(&self, mode: Mode) -> Option<(String, &'static str)> {
+        if mode == Mode::Tor || self.fingerprint == Fingerprint::Strict {
+            return Some((SAFARI_UA.into(), "MacIntel"));
+        }
+        match self.user_agent {
+            UserAgent::Default => None,
+            UserAgent::Safari => Some((SAFARI_UA.into(), "MacIntel")),
+            UserAgent::Chrome => Some((CHROME_UA.into(), "Win32")),
+            UserAgent::Firefox => Some((FIREFOX_UA.into(), "Win32")),
+            UserAgent::Custom => {
+                let ua = self.user_agent_custom.trim();
+                if ua.is_empty() || ua.contains(['\n', '\r']) {
+                    return None;
+                }
+                let platform = if ua.contains("Windows") { "Win32" } else if ua.contains("Macintosh") || ua.contains("Mac OS X") { "MacIntel" } else { "" };
+                Some((ua.to_string(), platform))
+            }
+        }
+    }
+
+    pub fn fingerprint_for(&self, mode: Mode) -> Fingerprint {
+        if mode == Mode::Tor { Fingerprint::Strict } else { self.fingerprint }
     }
 }
 
@@ -178,6 +250,13 @@ impl Default for Config {
             pm_database: String::new(),
             pm_keyfile: String::new(),
             pm_remember: Remember::Week,
+            proxy_mode: ProxyMode::System,
+            proxy_url: String::new(),
+            proxy_ignore: vec!["localhost".into(), "127.0.0.1".into(), "::1".into()],
+            fingerprint: Fingerprint::Standard,
+            user_agent: UserAgent::Default,
+            user_agent_custom: String::new(),
+            tor_https_only: true,
             ignore_media_warning: false,
             address_suggestions: false,
         }
@@ -391,6 +470,23 @@ mod tests {
         let s = "a b&c=ä/ü%";
         assert_eq!(url_decode(&url_encode(s)), s);
         assert_eq!(url_decode("100%"), "100%");
+    }
+
+    #[test]
+    fn proxy_urls() {
+        assert!(valid_proxy_url("socks5://127.0.0.1:1080"));
+        assert!(valid_proxy_url("http://user:pass@proxy.example.com:3128"));
+        assert!(!valid_proxy_url("ftp://proxy:21"));
+        assert!(!valid_proxy_url("http://proxy"));
+        assert!(!valid_proxy_url("socks5://:1080"));
+    }
+
+    #[test]
+    fn tor_always_strict() {
+        let c = Config { fingerprint: Fingerprint::Off, user_agent: UserAgent::Chrome, ..Config::default() };
+        assert_eq!(c.fingerprint_for(Mode::Tor), Fingerprint::Strict);
+        assert_eq!(c.user_agent_for(Mode::Tor).map(|(_, p)| p), Some("MacIntel"));
+        assert_eq!(c.user_agent_for(Mode::Normal).map(|(_, p)| p), Some("Win32"));
     }
 
     #[test]

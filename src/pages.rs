@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::config::{self, BridgeKind, Config, EngineKind, Theme, SEARCH_ENGINES, WALLPAPER_PRESETS};
+use crate::config::{self, BridgeKind, Config, Fingerprint, ProxyMode, UserAgent, EngineKind, Theme, SEARCH_ENGINES, WALLPAPER_PRESETS};
 use crate::memory;
 use crate::storage::{Entry, Shelf};
 
@@ -479,6 +479,28 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         };
         c.ignore_media_warning = flag("ignore_media_warning");
         c.address_suggestions = flag("address_suggestions");
+        c.tor_https_only = flag("tor_https_only");
+        c.fingerprint = match text("fingerprint").as_deref() {
+            Some("off") => Fingerprint::Off,
+            Some("strict") => Fingerprint::Strict,
+            _ => Fingerprint::Standard,
+        };
+        c.user_agent = match text("user_agent").as_deref() {
+            Some("safari") => UserAgent::Safari,
+            Some("chrome") => UserAgent::Chrome,
+            Some("firefox") => UserAgent::Firefox,
+            Some("custom") => UserAgent::Custom,
+            _ => UserAgent::Default,
+        };
+        c.user_agent_custom = text("user_agent_custom").unwrap_or_default().replace(['\n', '\r'], " ").trim().to_string();
+        c.proxy_url = text("proxy_url").unwrap_or_default().trim().to_string();
+        c.proxy_mode = match text("proxy_mode").as_deref() {
+            Some("none") => ProxyMode::None,
+            Some("custom") if config::valid_proxy_url(&c.proxy_url) => ProxyMode::Custom,
+            Some("custom") => c.proxy_mode,
+            _ => ProxyMode::System,
+        };
+        c.proxy_ignore = text("proxy_ignore").unwrap_or_default().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
         let bridge_kind = text("tor_bridge_kind").as_deref().and_then(BridgeKind::from_id);
         c.tor_use_bridges = bridge_kind.is_some();
         if bridge_kind.is_some() {
@@ -501,6 +523,7 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         app.apply_appearance();
         app.layout_changed();
         app.passwords.remember_changed();
+        app.apply_proxy();
         notice = "<div class=\"notice\">Gespeichert. Mit * markierte Einstellungen wirken nach einem Neustart von PoeziBrowse.</div>".into();
     }
 
@@ -611,6 +634,7 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
                 format!("<span class=\"badge-err\">nicht installiert – {}</span>", crate::system::tor_install_command())
             },
         ),
+        row("Nur HTTPS im Tor-Modus", "Unverschlüsselte Seiten werden auf HTTPS umgestellt oder blockiert, damit der Ausgangsknoten nichts mitlesen kann (.onion-Seiten sind ausgenommen)", format!("<input type=\"checkbox\" name=\"tor_https_only\"{}>", checked(c.tor_https_only))),
         row("JavaScript im Tor-Modus", "Aus ist sicherer, viele Seiten funktionieren dann aber nicht", format!("<input type=\"checkbox\" name=\"tor_javascript\"{}>", checked(c.tor_javascript))),
         row(
             "Brücke",
@@ -624,6 +648,56 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
             format!("<textarea name=\"tor_bridges\" placeholder=\"obfs4 1.2.3.4:443 FINGERPRINT cert=… iat-mode=0\">{}</textarea>", escape(&c.tor_bridges.join("\n"))),
         ),
         row("Brücken-Programm", "Für obfs4, Snowflake, meek und webtunnel", transports),
+    ];
+    let select = |name: &str, options: &[(&str, &str, bool)]| {
+        let options: String = options
+            .iter()
+            .map(|(value, label, selected)| format!("<option value=\"{value}\"{}>{label}</option>", if *selected { " selected" } else { "" }))
+            .collect();
+        format!("<select name=\"{name}\">{options}</select>")
+    };
+    let proxy_warning = if !c.proxy_url.is_empty() && !config::valid_proxy_url(&c.proxy_url) {
+        "<br><span class=\"badge-err\">Ungültige Proxy-Adresse – Beispiel: socks5://127.0.0.1:1080</span>"
+    } else {
+        ""
+    };
+    let privacy_rows = [
+        row(
+            "Schutz vor Fingerprinting *",
+            "Standard: Canvas- und Audio-Fingerprints werden verrauscht, Grafikkarte und Prozessorkerne verborgen, Global Privacy Control gesendet. Streng: zusätzlich ohne WebGL, WebRTC, Gamepads und Sprachausgabe, Zeitzone UTC, Sprache Englisch. Tor-Tabs sind immer streng.",
+            select("fingerprint", &[
+                ("off", "Aus", c.fingerprint == Fingerprint::Off),
+                ("standard", "Standard (empfohlen)", c.fingerprint == Fingerprint::Standard),
+                ("strict", "Streng – manche Seiten funktionieren nicht", c.fingerprint == Fingerprint::Strict),
+            ]),
+        ),
+        row(
+            "User-Agent *",
+            "Wie sich PoeziBrowse bei Webseiten ausgibt. Bei „Streng“ und in Tor-Tabs immer Safari, weil das zur Engine passt",
+            select("user_agent", &[
+                ("default", "Standard (WebKitGTK unter Linux)", c.user_agent == UserAgent::Default),
+                ("safari", "Safari auf macOS – unauffälligste Wahl", c.user_agent == UserAgent::Safari),
+                ("chrome", "Chrome auf Windows", c.user_agent == UserAgent::Chrome),
+                ("firefox", "Firefox auf Windows", c.user_agent == UserAgent::Firefox),
+                ("custom", "Eigener (unten eintragen)", c.user_agent == UserAgent::Custom),
+            ]),
+        ),
+        row("Eigener User-Agent *", "Nur für „Eigener“", format!("<input type=\"text\" name=\"user_agent_custom\" value=\"{}\" placeholder=\"Mozilla/5.0 …\">", escape(&c.user_agent_custom))),
+        row(
+            "Proxy",
+            "Gilt sofort für normale und private Tabs. Tor-Tabs gehen immer über Tor",
+            select("proxy_mode", &[
+                ("system", "Wie im System eingestellt", c.proxy_mode == ProxyMode::System),
+                ("none", "Kein Proxy", c.proxy_mode == ProxyMode::None),
+                ("custom", "Eigener Proxy (unten eintragen)", c.proxy_mode == ProxyMode::Custom),
+            ]),
+        ),
+        row(
+            "Proxy-Adresse",
+            "http://, https://, socks4:// oder socks5:// mit Port, z. B. socks5://127.0.0.1:1080 oder http://benutzer:passwort@proxy:3128",
+            format!("<input type=\"text\" name=\"proxy_url\" value=\"{}\" placeholder=\"socks5://127.0.0.1:1080\">{proxy_warning}", escape(&c.proxy_url)),
+        ),
+        row("Ohne Proxy", "Eine Adresse pro Zeile, z. B. localhost oder 192.168.0.0/16", format!("<textarea name=\"proxy_ignore\">{}</textarea>", escape(&c.proxy_ignore.join("\n")))),
     ];
     let password_rows = [
         row("Passwortmanager", "KeePassXC-Datenbank oder eigener Manager", escape(&app.passwords.status_text())),
@@ -689,6 +763,7 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
              <input type=\"hidden\" name=\"token\" value=\"{}\"><input type=\"hidden\" name=\"save\" value=\"1\">\
              <h2>Erscheinungsbild</h2><div class=\"settings\">{}</div>\
              <h2 id=\"hintergrund\">Hintergrund</h2><div class=\"settings\">{}</div>\
+             <h2 id=\"privatsphaere\">Privatsphäre</h2><div class=\"settings\">{}</div>\
              <h2 id=\"tor\">Tor-Modus</h2><div class=\"settings\">{}</div>\
              <h2 id=\"passwoerter\">Passwörter</h2><div class=\"settings\">{}</div>\
              <h2>Browser</h2><div class=\"settings\">{}</div>\
@@ -696,6 +771,7 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
             app.token,
             appearance.concat(),
             wallpaper_rows.concat(),
+            privacy_rows.concat(),
             tor_rows.concat(),
             password_rows.concat(),
             rows.concat()

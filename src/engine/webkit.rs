@@ -18,7 +18,7 @@ use webkit2gtk::{
 
 use super::{EventSink, Page, PageEvent, SinkSlot};
 use crate::blocker::{self, Blocker};
-use crate::config::{self, Config, EngineKind, Mode};
+use crate::config::{self, Config, EngineKind, Fingerprint, Mode, ProxyMode};
 
 pub type SchemeHandler = Rc<dyn Fn(&str) -> (String, Vec<u8>)>;
 
@@ -36,6 +36,8 @@ pub struct WebKitEngine {
     media_fix: webkit2gtk::UserScript,
     managers: RefCell<Vec<glib::WeakRef<UserContentManager>>>,
     tor_port: u16,
+    fingerprint_script: Option<webkit2gtk::UserScript>,
+    tor_https_only: bool,
 }
 
 #[derive(Clone)]
@@ -67,16 +69,20 @@ impl WebKitEngine {
         WebsiteDataManager::set_memory_pressure_settings(&mut pressure.clone());
         if mode == Mode::Tor {
             set_tor_proxy(&data_manager, tor_port);
+        } else {
+            apply_proxy(&data_manager, config);
         }
+        let fingerprint = config.fingerprint_for(mode);
+        let strict = fingerprint == Fingerprint::Strict;
 
         let mut builder = WebContext::builder()
             .website_data_manager(&data_manager)
             .memory_pressure_settings(&pressure);
-        if mode == Mode::Tor {
+        if strict {
             builder = builder.time_zone_override("Etc/UTC");
         }
         let context = builder.build();
-        if mode == Mode::Tor {
+        if strict {
             context.set_preferred_languages(&["en-US", "en"]);
         }
         context.set_cache_model(if config.saver_mode {
@@ -114,14 +120,41 @@ impl WebKitEngine {
         } else {
             HardwareAccelerationPolicy::Never
         });
-        enable_feature(&settings, "PDFJSViewerEnabled");
-        if mode == Mode::Tor {
+        set_feature(&settings, "PDFJSViewerEnabled", true);
+        let user_agent = config.user_agent_for(mode);
+        if let Some((ua, _)) = &user_agent {
+            settings.set_user_agent(Some(ua));
+        }
+        if fingerprint != Fingerprint::Off {
+            set_feature(&settings, "GlobalPrivacyControl", true);
+        }
+        if strict {
             settings.set_enable_webrtc(false);
             settings.set_enable_media_stream(false);
             settings.set_enable_webgl(false);
+            for feature in ["Gamepads", "SpeechSynthesisAPI", "OffscreenCanvasInWorkers", "WebGL"] {
+                set_feature(&settings, feature, false);
+            }
+        }
+        if mode == Mode::Tor {
             settings.set_enable_encrypted_media(false);
             settings.set_enable_javascript(config.tor_javascript);
         }
+        let fingerprint_script = (fingerprint != Fingerprint::Off).then(|| {
+            let mut seed = [0u8; 4];
+            let _ = getrandom::fill(&mut seed);
+            let platform = user_agent.as_ref().map(|(_, p)| *p).unwrap_or("");
+            let source = include_str!("fingerprint.js")
+                .replace("__SEED__", &u32::from_le_bytes(seed).to_string())
+                .replace("__PLATFORM__", &format!("'{platform}'"));
+            webkit2gtk::UserScript::new(
+                &source,
+                webkit2gtk::UserContentInjectedFrames::AllFrames,
+                webkit2gtk::UserScriptInjectionTime::Start,
+                &[],
+                &[],
+            )
+        });
 
         let policies = WebsitePolicies::builder()
             .autoplay(if config.autoplay_sound {
@@ -151,6 +184,8 @@ impl WebKitEngine {
             ),
             managers: RefCell::new(Vec::new()),
             tor_port,
+            fingerprint_script,
+            tor_https_only: config.tor_https_only,
         })
     }
 
@@ -208,6 +243,12 @@ impl WebKitEngine {
         }
     }
 
+    pub fn apply_proxy(&self, config: &Config) {
+        if self.mode != Mode::Tor {
+            apply_proxy(&self.data_manager, config);
+        }
+    }
+
     pub fn new_tor_circuits(&self) {
         if self.mode == Mode::Tor {
             set_tor_proxy(&self.data_manager, self.tor_port);
@@ -246,6 +287,9 @@ impl WebKitEngine {
     fn new_content_manager(&self) -> UserContentManager {
         let ucm = UserContentManager::new();
         webkit2gtk::UserContentManagerExt::add_script(&ucm, &self.media_fix);
+        if let Some(script) = &self.fingerprint_script {
+            webkit2gtk::UserContentManagerExt::add_script(&ucm, script);
+        }
         if let Some(blocking) = self.blocking.borrow().as_ref() {
             for filter in blocking.blocker.filters.borrow().iter() {
                 blocker::add_filter(&ucm, filter);
@@ -384,7 +428,9 @@ impl WebKitPage {
         });
 
         let s = sink.clone();
-        v.connect_decide_policy(move |_, decision, kind| decide_policy(&s, decision, kind));
+        let tor = self.engine.mode == Mode::Tor;
+        let https_only = tor && self.engine.tor_https_only;
+        v.connect_decide_policy(move |view, decision, kind| decide_policy(&s, view, decision, kind, tor, https_only));
 
         v.connect_button_press_event(|view, event| match event.button() {
             8 => {
@@ -462,11 +508,41 @@ impl WebKitPage {
     }
 }
 
-fn decide_policy(sink: &SinkSlot, decision: &PolicyDecision, kind: PolicyDecisionType) -> bool {
+fn needs_https(uri: &str) -> bool {
+    uri.get(..7).is_some_and(|p| p.eq_ignore_ascii_case("http://")) && !config::host_of(uri).is_some_and(|h| h.ends_with(".onion"))
+}
+
+fn upgrade_to_https(uri: &str) -> String {
+    format!("https://{}", &uri[7..])
+}
+
+const INTERNAL_SCHEMES: &[&str] = &["http", "https", "file", "poezi", "about", "data", "blob", "javascript", "webkit-pdfjs-viewer"];
+
+fn decide_policy(sink: &SinkSlot, view: &WebView, decision: &PolicyDecision, kind: PolicyDecisionType, tor: bool, https_only: bool) -> bool {
     match kind {
-        PolicyDecisionType::NavigationAction => {
+        PolicyDecisionType::NavigationAction | PolicyDecisionType::NewWindowAction => {
             let Some(nav) = decision.downcast_ref::<NavigationPolicyDecision>() else { return false };
-            let Some(action) = nav.navigation_action() else { return false };
+            let Some(mut action) = nav.navigation_action() else { return false };
+            let target = action.request().and_then(|r| r.uri()).map(|u| u.to_string()).unwrap_or_default();
+            let scheme = target.split_once(':').map(|(s, _)| s.to_ascii_lowercase()).unwrap_or_default();
+            if !scheme.is_empty() && !INTERNAL_SCHEMES.contains(&scheme.as_str()) {
+                decision.ignore();
+                if !tor && action.is_user_gesture() {
+                    let _ = gtk::gio::AppInfo::launch_default_for_uri(&target, None::<&gtk::gio::AppLaunchContext>);
+                }
+                return true;
+            }
+            if https_only && needs_https(&target) {
+                decision.ignore();
+                let clicked = action.navigation_type() == webkit2gtk::NavigationType::LinkClicked && action.frame_name().is_none();
+                if kind == PolicyDecisionType::NavigationAction && clicked {
+                    view.load_uri(&upgrade_to_https(&target));
+                }
+                return true;
+            }
+            if kind == PolicyDecisionType::NewWindowAction {
+                return false;
+            }
             let ctrl = action.modifiers() & gtk::gdk::ModifierType::CONTROL_MASK.bits() != 0;
             let middle = action.mouse_button() == 2;
             if middle || ctrl {
@@ -561,6 +637,22 @@ fn arm_image_clipboard_fix() {
     });
 }
 
+fn apply_proxy(data_manager: &WebsiteDataManager, config: &Config) {
+    match config.proxy_mode {
+        ProxyMode::System => data_manager.set_network_proxy_settings(NetworkProxyMode::Default, None),
+        ProxyMode::None => data_manager.set_network_proxy_settings(NetworkProxyMode::NoProxy, None),
+        ProxyMode::Custom => {
+            if config::valid_proxy_url(&config.proxy_url) {
+                let ignore: Vec<&str> = config.proxy_ignore.iter().map(String::as_str).collect();
+                let mut settings = NetworkProxySettings::new(Some(&config.proxy_url), &ignore);
+                data_manager.set_network_proxy_settings(NetworkProxyMode::Custom, Some(&mut settings));
+            } else {
+                data_manager.set_network_proxy_settings(NetworkProxyMode::NoProxy, None);
+            }
+        }
+    }
+}
+
 fn set_tor_proxy(data_manager: &WebsiteDataManager, port: u16) {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let mut bytes = [0u8; 12];
@@ -572,7 +664,7 @@ fn set_tor_proxy(data_manager: &WebsiteDataManager, port: u16) {
     data_manager.set_network_proxy_settings(NetworkProxyMode::Custom, Some(&mut proxy_settings));
 }
 
-fn enable_feature(settings: &Settings, identifier: &str) -> bool {
+fn set_feature(settings: &Settings, identifier: &str, enabled: bool) -> bool {
     type AllFeatures = unsafe extern "C" fn() -> *mut std::ffi::c_void;
     type Length = unsafe extern "C" fn(*mut std::ffi::c_void) -> usize;
     type Get = unsafe extern "C" fn(*mut std::ffi::c_void, usize) -> *mut std::ffi::c_void;
@@ -607,7 +699,7 @@ fn enable_feature(settings: &Settings, identifier: &str) -> bool {
             let feature = get(list, i);
             let name = id(feature);
             if !name.is_null() && std::ffi::CStr::from_ptr(name).to_bytes() == identifier.as_bytes() {
-                set(settings.to_glib_none().0, feature, 1);
+                set(settings.to_glib_none().0, feature, enabled as i32);
                 found = true;
                 break;
             }
@@ -668,7 +760,11 @@ impl Page for PageHandle {
         self.0.sink.set(sink);
     }
     fn load_uri(&self, uri: &str) {
-        self.0.view.load_uri(uri);
+        if self.0.engine.mode == Mode::Tor && self.0.engine.tor_https_only && needs_https(uri) {
+            self.0.view.load_uri(&upgrade_to_https(uri));
+        } else {
+            self.0.view.load_uri(uri);
+        }
     }
     fn reload(&self, bypass_cache: bool) {
         if bypass_cache {
@@ -770,7 +866,15 @@ impl Page for PageHandle {
 
 #[cfg(test)]
 mod tests {
-    use super::site_key;
+    use super::{needs_https, site_key, upgrade_to_https};
+
+    #[test]
+    fn https_upgrade() {
+        assert!(needs_https("http://example.com/a?b"));
+        assert!(!needs_https("https://example.com/"));
+        assert!(!needs_https("http://abcdefghijklmnop.onion/"));
+        assert_eq!(upgrade_to_https("http://example.com/a"), "https://example.com/a");
+    }
 
     #[test]
     fn sites() {

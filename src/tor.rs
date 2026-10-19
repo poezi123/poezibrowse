@@ -118,7 +118,7 @@ fn control_cookie() -> PathBuf {
 
 pub fn torrc(config: &Config, port: u16, data_dir: &std::path::Path) -> Result<String, String> {
     let mut rc = format!(
-        "DataDirectory \"{}\"\nSocksPort 127.0.0.1:{port}\nLog notice stdout\nAvoidDiskWrites 1\nClientOnly 1\n__OwningControllerProcess {}\n\
+        "DataDirectory \"{}\"\nSocksPort 127.0.0.1:{port} IsolateDestAddr\nLog notice stdout\nAvoidDiskWrites 1\nClientOnly 1\n__OwningControllerProcess {}\n\
          ControlSocket \"{}\"\nCookieAuthentication 1\nCookieAuthFile \"{}\"\n",
         data_dir.display(),
         std::process::id(),

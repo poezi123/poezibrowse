@@ -229,6 +229,15 @@ impl App {
         [&self.webkit, &self.webkit_private, &self.webkit_tor].iter().filter_map(|s| s.borrow().clone()).collect()
     }
 
+    pub fn apply_proxy(&self) {
+        let config = self.config.borrow();
+        for mode in [Mode::Normal, Mode::Private] {
+            if let Some(engine) = self.engine_slot(mode).borrow().as_ref() {
+                engine.apply_proxy(&config);
+            }
+        }
+    }
+
     pub fn new_tor_circuits(&self) {
         if let Some(engine) = self.engine_slot(Mode::Tor).borrow().as_ref() {
             engine.new_tor_circuits();

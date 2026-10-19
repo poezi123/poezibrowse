@@ -48,9 +48,9 @@ The interface is in German for now.
 
 | System | Package | |
 |---|---|---|
-| **Arch Linux**, Garuda, CachyOS, Manjaro, EndeavourOS | `poezibrowse-0.5.1-1-x86_64.pkg.tar.zst` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.1/poezibrowse-0.5.1-1-x86_64.pkg.tar.zst) |
-| **Ubuntu 24.04+**, Debian 13, Linux Mint 22 | `poezibrowse_0.5.1_amd64.deb` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.1/poezibrowse_0.5.1_amd64.deb) |
-| **Any other Linux** (Fedora, openSUSE, …) | `poezibrowse-0.5.1-linux-x64.tar.gz` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.5.1/poezibrowse-0.5.1-linux-x64.tar.gz) |
+| **Arch Linux**, Garuda, CachyOS, Manjaro, EndeavourOS | `poezibrowse-0.6.0-1-x86_64.pkg.tar.zst` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.6.0/poezibrowse-0.6.0-1-x86_64.pkg.tar.zst) |
+| **Ubuntu 24.04+**, Debian 13, Linux Mint 22 | `poezibrowse_0.6.0_amd64.deb` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.6.0/poezibrowse_0.6.0_amd64.deb) |
+| **Any other Linux** (Fedora, openSUSE, …) | `poezibrowse-0.6.0-linux-x64.tar.gz` | [Download](https://github.com/poezi123/poezibrowse/releases/download/v0.6.0/poezibrowse-0.6.0-linux-x64.tar.gz) |
 
 All versions and checksums (`SHA256SUMS.txt`) are on the
 [releases page](https://github.com/poezi123/poezibrowse/releases).
@@ -65,20 +65,20 @@ that means Ubuntu 24.04, Debian 13, Fedora 40 or any current Arch-based system.
 **Arch Linux and derivatives**
 
 ```sh
-sudo pacman -U poezibrowse-0.5.1-1-x86_64.pkg.tar.zst
+sudo pacman -U poezibrowse-0.6.0-1-x86_64.pkg.tar.zst
 ```
 
 **Ubuntu, Debian, Linux Mint** – double-click the file, or:
 
 ```sh
-sudo apt install ./poezibrowse_0.5.1_amd64.deb
+sudo apt install ./poezibrowse_0.6.0_amd64.deb
 ```
 
 **Any other distribution** – install WebKitGTK 4.1 with your package manager first, then (no root needed):
 
 ```sh
-tar xzf poezibrowse-0.5.1-linux-x64.tar.gz
-cd poezibrowse-0.5.1-linux-x64
+tar xzf poezibrowse-0.6.0-linux-x64.tar.gz
+cd poezibrowse-0.6.0-linux-x64
 ./install.sh        # adds PoeziBrowse to your app menu (~/.local)
 ```
 
@@ -126,7 +126,14 @@ sha256sum -c SHA256SUMS.txt --ignore-missing
 - Open a Tor tab with the onion in the sidebar or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>U</kbd>; PoeziBrowse starts its own Tor process
 - Built-in bridges from Tor Browser (obfs4, Snowflake, meek) – choose one in the settings, pros and cons are listed right there; your own bridges (incl. webtunnel) work too
 - The onion button shows the circuit of the current site – entry, middle and exit relay with country and IP – and gets you a new one with a fresh middle and exit relay
-- DNS is resolved by Tor; WebRTC and WebGL are off, the time zone is UTC
+- DNS is resolved by Tor; WebRTC and WebGL are off, the time zone is UTC; every destination gets its own circuit
+- HTTPS only: plain `http://` is upgraded or blocked (except .onion), so exit relays can't read along; external links like `magnet:` or `mailto:` are blocked because the opened app would bypass Tor
+- Always the strict fingerprinting protection and a Safari user agent
+
+**Privacy**
+- Fingerprinting protection (off / standard / strict): canvas and audio fingerprints get per-session noise, GPU and CPU core count are hidden, Global Privacy Control is sent; strict also turns off WebGL, WebRTC, gamepads and speech synthesis and uses UTC and English
+- Changeable user agent: Safari (macOS), Chrome or Firefox (Windows) or your own – `navigator.platform` follows along
+- Proxy for normal and private tabs: system setting, none, or your own HTTP, HTTPS, SOCKS4 or SOCKS5 proxy with exceptions
 - Separate Tor favorites; searches go to the DuckDuckGo onion service
 - Links opened from a Tor tab stay in Tor tabs
 

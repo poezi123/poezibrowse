@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.6.0 – proxy, fingerprinting protection, user agent / Proxy, Fingerprinting-Schutz, User-Agent
+
+**English**
+
+- **Proxy** for normal and private tabs: system setting, none, or your own HTTP, HTTPS, SOCKS4 or SOCKS5 proxy with exceptions – applied immediately.
+- **Fingerprinting protection** (off / standard / strict, standard by default): per-session noise on canvas and audio fingerprints, hidden GPU and CPU core count, screen size without the panel, Global Privacy Control. Strict also disables WebGL, WebRTC, gamepads and speech synthesis and uses UTC and English.
+- **User agent** can be changed: Safari (macOS), Chrome or Firefox (Windows) or your own; `navigator.platform` matches.
+- **Tor hardening:** HTTPS only (plain HTTP is upgraded or blocked, .onion excepted), stream isolation per destination, external URI schemes (`magnet:`, `mailto:` …) blocked, always strict fingerprinting protection with a Safari user agent.
+
+**Deutsch**
+
+- **Proxy** für normale und private Tabs: wie im System, keiner, oder ein eigener HTTP-, HTTPS-, SOCKS4- oder SOCKS5-Proxy mit Ausnahmen – wirkt sofort.
+- **Schutz vor Fingerprinting** (aus / Standard / streng, Standard ist voreingestellt): Canvas- und Audio-Fingerprints werden pro Sitzung verrauscht, Grafikkarte und Prozessorkerne verborgen, Bildschirmgröße ohne Leiste, Global Privacy Control. Streng schaltet zusätzlich WebGL, WebRTC, Gamepads und Sprachausgabe ab und nutzt UTC und Englisch.
+- **User-Agent** änderbar: Safari (macOS), Chrome oder Firefox (Windows) oder ein eigener; `navigator.platform` passt dazu.
+- **Tor abgesichert:** Nur HTTPS (HTTP wird umgestellt oder blockiert, .onion ausgenommen), eigene Verbindung pro Ziel, fremde Link-Arten (`magnet:`, `mailto:` …) blockiert, immer strenger Fingerprinting-Schutz mit Safari-User-Agent.
+
 ## v0.5.1
 
 - **Fixed YouTube and other video pages crashing on NVIDIA under Wayland with WebKitGTK 2.54:** the DMA-BUF workaround from 0.4.2 makes WebKitGTK 2.54 abort as soon as a page needs accelerated compositing. It is now only used with older WebKitGTK versions.
