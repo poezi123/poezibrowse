@@ -17,7 +17,20 @@ fn file() -> PathBuf {
     config::data_dir().join("cookies.enc")
 }
 
+static KEY: std::sync::Mutex<Option<Zeroizing<[u8; 32]>>> = std::sync::Mutex::new(None);
+static PRELOAD: std::sync::Mutex<Option<std::sync::mpsc::Receiver<Vec<(String, String)>>>> = std::sync::Mutex::new(None);
+
 fn key(create: bool) -> Option<Zeroizing<[u8; 32]>> {
+    let mut cached = KEY.lock().ok()?;
+    if let Some(key) = cached.as_ref() {
+        return Some(key.clone());
+    }
+    let key = load_key(create)?;
+    *cached = Some(key.clone());
+    Some(key)
+}
+
+fn load_key(create: bool) -> Option<Zeroizing<[u8; 32]>> {
     if let Some(hex) = secret::load(Kind::CookieKey) {
         let mut key = Zeroizing::new([0u8; 32]);
         if hex.len() != 64 {
@@ -64,14 +77,32 @@ pub fn forget() {
     let _ = std::fs::remove_file(file());
 }
 
-pub fn restore(manager: &CookieManager) {
-    let Ok(data) = std::fs::read(file()) else { return };
-    let Some(key) = key(false) else { return };
+fn read_saved() -> Vec<(String, String)> {
+    let Ok(data) = std::fs::read(file()) else { return Vec::new() };
+    let Some(key) = key(false) else { return Vec::new() };
     let Some(plain) = decrypt(&key, &data) else {
         eprintln!("poezibrowse: saved logins could not be decrypted");
-        return;
+        return Vec::new();
     };
-    let Ok(entries) = serde_json::from_slice::<Vec<(String, String)>>(&plain) else { return };
+    serde_json::from_slice::<Vec<(String, String)>>(&plain).unwrap_or_default()
+}
+
+pub fn preload() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    if let Ok(mut slot) = PRELOAD.lock() {
+        *slot = Some(rx);
+    }
+    std::thread::spawn(move || {
+        let _ = tx.send(read_saved());
+    });
+}
+
+pub fn restore(manager: &CookieManager) {
+    let receiver = PRELOAD.lock().ok().and_then(|mut slot| slot.take());
+    let entries = match receiver {
+        Some(rx) => rx.recv_timeout(Duration::from_secs(5)).unwrap_or_default(),
+        None => read_saved(),
+    };
     for (domain, header) in entries {
         let host = domain.trim_start_matches('.');
         let Ok(origin) = glib::Uri::parse(&format!("https://{host}/"), glib::UriFlags::NONE) else { continue };
@@ -81,9 +112,9 @@ pub fn restore(manager: &CookieManager) {
     }
 }
 
-fn write(cookies: Vec<soup::Cookie>) {
+fn entries(cookies: Vec<soup::Cookie>) -> Vec<(String, String)> {
     let now = glib::DateTime::now_utc().ok();
-    let entries: Vec<(String, String)> = cookies
+    cookies
         .into_iter()
         .filter_map(|mut c| {
             let expires = c.expires()?;
@@ -92,7 +123,10 @@ fn write(cookies: Vec<soup::Cookie>) {
             }
             Some((c.domain()?.to_string(), c.to_set_cookie_header()?.to_string()))
         })
-        .collect();
+        .collect()
+}
+
+fn write(entries: Vec<(String, String)>) {
     if entries.is_empty() {
         forget();
         return;
@@ -180,10 +214,13 @@ impl Keeper {
             return;
         }
         let weak = Rc::downgrade(self);
-        glib::timeout_add_local_once(Duration::from_secs(5), move || {
+        glib::timeout_add_local_once(Duration::from_secs(30), move || {
             if let Some(k) = weak.upgrade() {
                 k.pending.set(false);
-                all_cookies(&k.manager, write);
+                all_cookies(&k.manager, |cookies| {
+                    let entries = entries(cookies);
+                    std::thread::spawn(move || write(entries));
+                });
             }
         });
     }
@@ -205,7 +242,7 @@ impl Keeper {
             context.iteration(true);
         }
         if let Some(cookies) = result.take() {
-            write(cookies);
+            write(entries(cookies));
         }
     }
 }

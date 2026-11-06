@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.7.1 – no more freezes / keine Hänger mehr
+
+**English**
+
+- **Fixed the browser freezing for a moment again and again** (no clicks, no scrolling, cursor stuck): since 0.7.0 the login key was decrypted with the TPM on the main thread every time a site changed a cookie – about 0.6 s each time. The key is now decrypted once in the background at startup, encryption and writing run in a background thread, and saving happens at most every 30 seconds.
+- Permission questions (camera, location, notifications …) no longer block the window – a hidden dialog on another monitor could freeze it under tiling window managers like Hyprland.
+- **Green videos on NVIDIA:** video frames no longer go through WebKit's DMA-BUF video sink on NVIDIA.
+- **Less CPU for videos:** without the fast dav1d decoder, AV1 is no longer offered to sites, so YouTube uses VP9 or H.264 instead of the slow aom decoder. The Arch package now depends on gst-plugin-dav1d.
+- Ad-block rule lists are only swapped when they actually change, not on every navigation.
+
+**Deutsch**
+
+- **Behoben: Der Browser fror immer wieder kurz ein** (kein Klick, kein Scrollen, Cursor reagiert nicht): Seit 0.7.0 wurde der Login-Schlüssel bei jeder Cookie-Änderung einer Seite im Hauptthread mit dem TPM-Chip entschlüsselt – jedes Mal rund 0,6 s. Jetzt wird er einmal beim Start im Hintergrund entschlüsselt, Verschlüsseln und Schreiben laufen in einem Hintergrund-Thread, gespeichert wird höchstens alle 30 Sekunden.
+- Berechtigungsfragen (Kamera, Standort, Benachrichtigungen …) blockieren das Fenster nicht mehr – ein versteckter Dialog auf einem anderen Monitor konnte es unter Tiling-Fenstermanagern wie Hyprland einfrieren.
+- **Grüne Videos auf NVIDIA:** Videobilder laufen auf NVIDIA nicht mehr über WebKits DMA-BUF-Videoausgabe.
+- **Weniger CPU bei Videos:** Ohne den schnellen dav1d-Decoder wird Seiten kein AV1 mehr angeboten, YouTube nimmt dann VP9 oder H.264 statt des langsamen aom-Decoders. Das Arch-Paket hängt jetzt von gst-plugin-dav1d ab.
+- Werbeblocker-Listen werden nur noch ausgetauscht, wenn sich wirklich etwas ändert, nicht bei jedem Seitenwechsel.
+
 ## v0.7.0 – faster, safer, logins remembered / schneller, sicherer, Logins bleiben
 
 **English**

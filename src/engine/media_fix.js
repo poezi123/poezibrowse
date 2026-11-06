@@ -2,10 +2,17 @@
   if (window.__poeziMediaFix) return;
   window.__poeziMediaFix = true;
   const vp9 = /vp0?9/i;
+  const av1 = /av0?1/i;
+  const blockAv1 = __BLOCK_AV1__;
   const canPlayType = HTMLMediaElement.prototype.canPlayType;
   HTMLMediaElement.prototype.canPlayType = function (type) {
-    return vp9.test(String(type)) ? '' : canPlayType.call(this, type);
+    const t = String(type);
+    return vp9.test(t) || (blockAv1 && av1.test(t)) ? '' : canPlayType.call(this, type);
   };
+  if (blockAv1 && window.MediaSource && MediaSource.isTypeSupported) {
+    const isTypeSupported = MediaSource.isTypeSupported.bind(MediaSource);
+    MediaSource.isTypeSupported = (type) => (av1.test(String(type)) ? false : isTypeSupported(type));
+  }
   const isWebm = (url) => /\.webm($|[?#])/i.test(url || '');
   const watched = new WeakMap();
   const check = () => {

@@ -208,6 +208,9 @@ impl App {
         crate::system::install_fallback_icons();
         self.apply_appearance();
         self.passwords.remember_changed();
+        if self.config.borrow().remember_logins && crate::cookies::supported() {
+            crate::cookies::preload();
+        }
         let wants_blocker = {
             let c = self.config.borrow();
             c.block_ads || c.malware_protection

@@ -63,6 +63,7 @@ pub struct Blocker {
     store: *mut ffi::WebKitUserContentFilterStore,
     pub filters: RefCell<Vec<(String, Filter)>>,
     dangerous: RefCell<std::collections::HashSet<String>>,
+    generation: std::cell::Cell<u64>,
     on_ready: RefCell<Vec<Box<dyn Fn()>>>,
 }
 
@@ -82,7 +83,7 @@ impl Blocker {
         let _ = config::private_dir(&path);
         let c_path = CString::new(path.to_string_lossy().as_bytes()).unwrap_or_default();
         let store = unsafe { ffi::webkit_user_content_filter_store_new(c_path.as_ptr()) };
-        Rc::new(Blocker { store, filters: RefCell::new(Vec::new()), dangerous: RefCell::new(read_hosts()), on_ready: RefCell::new(Vec::new()) })
+        Rc::new(Blocker { store, filters: RefCell::new(Vec::new()), dangerous: RefCell::new(read_hosts()), generation: std::cell::Cell::new(0), on_ready: RefCell::new(Vec::new()) })
     }
 
     pub fn connect_ready(&self, f: impl Fn() + 'static) {
@@ -107,8 +108,13 @@ impl Blocker {
         }
     }
 
+    pub fn generation(&self) -> u64 {
+        self.generation.get()
+    }
+
     fn set_filters(&self, filters: Vec<(String, Filter)>) {
         *self.filters.borrow_mut() = filters;
+        self.generation.set(self.generation.get() + 1);
         *self.dangerous.borrow_mut() = read_hosts();
         for f in self.on_ready.borrow().iter() {
             f();

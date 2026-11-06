@@ -83,6 +83,10 @@ fn has_plugin(dirs: &[PathBuf], file: &str) -> bool {
     dirs.iter().any(|d| d.join(file).is_file())
 }
 
+pub fn fast_av1() -> bool {
+    has_plugin(&plugin_dirs(), "libgstdav1d.so")
+}
+
 pub struct MediaReport {
     pub missing: Vec<(&'static str, &'static str)>,
     pub critical: bool,
@@ -385,6 +389,11 @@ pub fn diagnose() -> String {
     out.push_str(&format!(
         "Darstellung:   {}\n",
         if dmabuf_disabled() { "ohne DMA-BUF (gegen Bildfehler mit NVIDIA unter Wayland)" } else { "DMA-BUF" }
+    ));
+    out.push_str(&format!(
+        "Videos:        {}{}\n",
+        if fast_av1() { "AV1 mit dav1d" } else { "AV1 aus (dav1d fehlt – YouTube nimmt VP9/H.264)" },
+        if std::env::var("WEBKIT_GST_DMABUF_SINK_DISABLED").is_ok_and(|v| v != "0") { ", Video-Ausgabe ohne DMA-BUF (gegen grüne Videos auf NVIDIA)" } else { "" }
     ));
     out.push_str(&format!("Schriften:     {}\n", if fonts_usable() { "ok".to_string() } else { format!("Schrift-Konfiguration kaputt – Seiten stürzen ab. Reparieren: {}", fonts_install_command()) }));
     out.push_str(&format!("HTTPS (TLS):   {}\n", if tls_available() { "ok".to_string() } else { format!("FEHLT – {}", tls_install_command()) }));

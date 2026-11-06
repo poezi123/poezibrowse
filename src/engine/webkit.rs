@@ -42,6 +42,7 @@ pub struct WebKitEngine {
     spare: RefCell<Option<(WebView, UserContentManager)>>,
     cookies: Option<Rc<crate::cookies::Keeper>>,
     pub permission_store: RefCell<Option<PermissionStore>>,
+    applied: RefCell<std::collections::HashMap<usize, (Vec<&'static str>, bool, u64)>>,
 }
 
 #[derive(Clone)]
@@ -193,7 +194,7 @@ impl WebKitEngine {
             blocking: RefCell::new(None),
             youtube: crate::youtube::YoutubeBlocker::new(),
             media_fix: webkit2gtk::UserScript::new(
-                include_str!("media_fix.js"),
+                &include_str!("media_fix.js").replace("__BLOCK_AV1__", if crate::system::fast_av1() { "false" } else { "true" }),
                 webkit2gtk::UserContentInjectedFrames::AllFrames,
                 webkit2gtk::UserScriptInjectionTime::Start,
                 &[],
@@ -207,6 +208,7 @@ impl WebKitEngine {
             spare: RefCell::new(None),
             cookies,
             permission_store: RefCell::new(None),
+            applied: RefCell::new(std::collections::HashMap::new()),
         })
     }
 
@@ -304,9 +306,19 @@ impl WebKitEngine {
     fn update_blocking(&self, ucm: &UserContentManager, uri: &str) {
         let Some(blocking) = self.blocking.borrow().clone() else { return };
         let host = config::host_of(uri).unwrap_or_default();
+        let ids = (blocking.filters_for)(&host);
+        let youtube = (blocking.enabled_for)(&host);
+        let generation = blocking.blocker.generation();
+        let key = ucm.as_ptr() as usize;
+        let wanted = (ids.clone(), youtube, generation);
+        if self.applied.borrow().get(&key) == Some(&wanted) {
+            return;
+        }
+        self.applied.borrow_mut().retain(|k, _| self.managers.borrow().iter().any(|w| w.upgrade().is_some_and(|u| u.as_ptr() as usize == *k)));
+        self.applied.borrow_mut().insert(key, wanted);
         blocker::remove_filters(ucm);
-        self.youtube.apply(ucm, (blocking.enabled_for)(&host));
-        for filter in blocking.blocker.select(&(blocking.filters_for)(&host)) {
+        self.youtube.apply(ucm, youtube);
+        for filter in blocking.blocker.select(&ids) {
             blocker::add_filter(ucm, &filter);
         }
     }
@@ -793,7 +805,7 @@ fn handle_permission(view: &WebView, request: &PermissionRequest, mode: Mode, st
     let parent = view.toplevel().and_then(|w| w.downcast::<gtk::Window>().ok());
     let dialog = gtk::MessageDialog::new(
         parent.as_ref(),
-        gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
+        gtk::DialogFlags::DESTROY_WITH_PARENT,
         gtk::MessageType::Question,
         gtk::ButtonsType::None,
         &format!("{host} möchte {} nutzen.", kind.label()),
