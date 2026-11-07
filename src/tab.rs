@@ -104,6 +104,17 @@ impl Tab {
         }
     }
 
+    pub fn set_split(&self, split: bool) {
+        let style = self.chip.style_context();
+        if split {
+            style.add_class("split");
+            self.icon.set_tooltip_text(Some("Geteilte Ansicht"));
+        } else {
+            style.remove_class("split");
+            self.icon.set_tooltip_text(None);
+        }
+    }
+
     pub fn is_sleeping(&self) -> bool {
         self.page.borrow().is_none()
     }

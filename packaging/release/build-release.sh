@@ -38,7 +38,7 @@ Version: $version
 Architecture: amd64
 Maintainer: poezi123 <poezi123@users.noreply.github.com>
 Installed-Size: $(du -sk --exclude=DEBIAN "$deb" | cut -f1)
-Depends: libc6 (>= 2.39), libwebkit2gtk-4.1-0 (>= 2.40), libgtk-3-0t64 | libgtk-3-0, libsqlite3-0, libglib2.0-0t64 | libglib2.0-0, glib-networking, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-libav
+Depends: libc6 (>= 2.39), libwebkit2gtk-4.1-0 (>= 2.40), libgtk-3-0t64 | libgtk-3-0, libsqlite3-0, libglib2.0-0t64 | libglib2.0-0, glib-networking, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-libav, libvte-2.91-0
 Recommends: bubblewrap, xdg-dbus-proxy, gstreamer1.0-plugins-bad, tor
 Suggests: tor, keepassxc
 Section: web

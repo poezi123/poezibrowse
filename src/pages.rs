@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::config::{self, BridgeKind, Config, CookiePolicy, Fingerprint, ProxyMode, UserAgent, EngineKind, Theme, SEARCH_ENGINES, WALLPAPER_PRESETS};
+use crate::config::{self, BridgeKind, Config, CookiePolicy, Fingerprint, ProxyMode, UserAgent, EngineKind, Theme, VideoMode, SEARCH_ENGINES, WALLPAPER_PRESETS};
 use crate::memory;
 use crate::storage::{Entry, Shelf};
 
@@ -45,8 +45,10 @@ form.search input { flex:1; font-size:17px; padding:13px 18px; border-radius:14p
 .muted { color: var(--muted); font-size: 13px; }
 .tiles { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .tile { display:flex; flex-direction:column; align-items:center; gap:8px; padding:16px 10px; border-radius:14px;
-  background: var(--card); border: 1px solid var(--line); color: var(--fg); text-align:center; min-width:0; }
-.tile:hover { border-color: var(--accent); text-decoration:none; }
+  background: var(--card); border: 1px solid var(--line); color: var(--fg); text-align:center; min-width:0;
+  transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease, background .16s ease; }
+.tile:hover { border-color: var(--accent); text-decoration:none; transform: translateY(-3px); box-shadow: 0 8px 22px rgba(0,0,0,.18); }
+.tile:active { transform: translateY(-1px); }
 .avatar { width:40px; height:40px; border-radius:12px; display:grid; place-items:center; color:#fff; font-weight:700; font-size:18px; flex:none; }
 .avatar.small { width:28px; height:28px; border-radius:8px; font-size:13px; }
 .tile .name { font-size: 13px; width:100%; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
@@ -83,6 +85,44 @@ table.stats td:last-child { text-align: right; font-variant-numeric: tabular-num
 .proscons li.pro span { color: #3fb950; }
 .proscons li.con span { color: var(--danger); }
 @media (max-width: 600px) { .settings { grid-template-columns: 1fr; } }
+.settings-nav { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 10px 0 12px; margin-bottom: 8px; }
+.settings-nav input[type=search] { width: 100%; margin-bottom: 10px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips .chip { font-size: 12px; padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--muted); }
+.chips .chip:hover { border-color: var(--accent); color: var(--fg); text-decoration: none; }
+.chips .chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chapter { scroll-margin-top: 110px; }
+.rules { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.rule { display: grid; grid-template-columns: 1fr 1fr 1.2fr; gap: 6px; }
+.rule input { width: 100%; }
+.save-bar { position: sticky; bottom: 0; background: linear-gradient(transparent, var(--bg) 40%); padding: 16px 0 4px; margin-top: 20px; }
+@media (max-width: 600px) { .rule { grid-template-columns: 1fr; } }
+button, .button { transition: background .15s ease, filter .15s ease, transform .1s ease, box-shadow .15s ease; }
+button:hover, .button:hover { filter: brightness(1.08); box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 30%, transparent); }
+button:active, .button:active { transform: translateY(1px); filter: brightness(.96); }
+.button.danger:hover { box-shadow: 0 4px 14px color-mix(in srgb, var(--danger) 32%, transparent); }
+.chips .chip { transition: background .15s ease, color .15s ease, border-color .15s ease, transform .1s ease; }
+.chips .chip:active { transform: translateY(1px); }
+.row, .preset, .proscons-box summary { transition: background .15s ease, border-color .15s ease, box-shadow .15s ease, color .15s ease; }
+.preset:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,.2); }
+body.anim main { animation: poezi-fade .45s ease both; }
+body.anim h1 { animation: poezi-rise .5s cubic-bezier(.2,.75,.3,1) both; }
+body.anim form.search { animation: poezi-rise .5s cubic-bezier(.2,.75,.3,1) both; animation-delay: .06s; }
+body.anim .tiles .tile { animation: poezi-pop .5s cubic-bezier(.2,.75,.3,1) both; }
+body.anim .tiles .tile:nth-child(1){animation-delay:.08s}body.anim .tiles .tile:nth-child(2){animation-delay:.13s}
+body.anim .tiles .tile:nth-child(3){animation-delay:.18s}body.anim .tiles .tile:nth-child(4){animation-delay:.23s}
+body.anim .tiles .tile:nth-child(5){animation-delay:.28s}body.anim .tiles .tile:nth-child(6){animation-delay:.33s}
+body.anim .tiles .tile:nth-child(7){animation-delay:.38s}body.anim .tiles .tile:nth-child(8){animation-delay:.43s}
+body.anim .tiles .tile:nth-child(9){animation-delay:.48s}body.anim .tiles .tile:nth-child(10){animation-delay:.53s}
+body.anim .tiles .tile:nth-child(11){animation-delay:.58s}body.anim .tiles .tile:nth-child(12){animation-delay:.63s}
+body.anim .settings { animation: poezi-fade .4s ease both; }
+body.anim .chapter { animation: poezi-rise .45s cubic-bezier(.2,.75,.3,1) both; }
+body.anim .chapter:nth-child(2){animation-delay:.04s}body.anim .chapter:nth-child(3){animation-delay:.08s}
+body.anim .chapter:nth-child(4){animation-delay:.12s}body.anim .chapter:nth-child(5){animation-delay:.16s}
+body.anim .notice { animation: poezi-rise .4s ease both; }
+@keyframes poezi-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes poezi-rise { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes poezi-pop { 0% { opacity: 0; transform: translateY(22px) scale(.92); } 60% { opacity: 1; } 100% { opacity: 1; transform: translateY(0) scale(1); } }
 "#;
 
 pub const WALLPAPER_MAX_BYTES: u64 = 25 * 1024 * 1024;
@@ -122,14 +162,70 @@ pub fn layout(title: &str, class: &str, body: &str) -> String {
     layout_with(title, class, "", body)
 }
 
+const SETTINGS_JS: &str = r#"
+(function(){
+  var search=document.getElementById('settings-search');
+  var empty=document.getElementById('settings-empty');
+  var chapters=[].slice.call(document.querySelectorAll('.chapter'));
+  var chips=[].slice.call(document.querySelectorAll('[data-nav]'));
+  function rows(sec){
+    var out=[],kids=sec.querySelector('.settings').children;
+    for(var i=0;i<kids.length;i+=2){out.push([kids[i],kids[i+1]]);}
+    return out;
+  }
+  function filter(){
+    var q=search.value.trim().toLowerCase(),any=false;
+    chapters.forEach(function(sec){
+      var shown=0,pairs=rows(sec);
+      pairs.forEach(function(p){
+        var t=(p[0].textContent+' '+(p[1]?p[1].textContent:'')).toLowerCase();
+        var m=!q||t.indexOf(q)>=0;
+        p[0].style.display=m?'':'none';
+        if(p[1])p[1].style.display=m?'':'none';
+        if(m)shown++;
+      });
+      var titleMatch=q&&sec.querySelector('h2').textContent.toLowerCase().indexOf(q)>=0;
+      if(titleMatch){pairs.forEach(function(p){p[0].style.display='';if(p[1])p[1].style.display='';});shown=pairs.length;}
+      sec.hidden=q&&shown===0&&!titleMatch;
+      if(!sec.hidden)any=true;
+    });
+    empty.hidden=any;
+  }
+  search.addEventListener('input',filter);
+  var obs=new IntersectionObserver(function(es){
+    es.forEach(function(e){
+      if(e.isIntersecting){
+        var id=e.target.getAttribute('data-chapter');
+        chips.forEach(function(c){c.classList.toggle('active',c.getAttribute('data-nav')===id);});
+      }
+    });
+  },{rootMargin:'-10% 0px -80% 0px'});
+  chapters.forEach(function(s){obs.observe(s);});
+  chips.forEach(function(c){c.addEventListener('click',function(){search.value='';filter();});});
+})();
+"#;
+
+fn layout_scripted(title: &str, nonce: &str, body: &str) -> String {
+    format!(
+        "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">\
+         <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-{nonce}'; img-src data: poezi:; form-action poezi: https: http:; base-uri 'none'\">\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <meta name=\"color-scheme\" content=\"light dark\"><title>{}</title><style>{STYLE}{WALLPAPER_STYLE}</style></head>\
+         <body class=\"{}\"><main>{body}</main></body></html>",
+        escape(title),
+        body_anim_class()
+    )
+}
+
 fn layout_with(title: &str, class: &str, body_class: &str, body: &str) -> String {
     format!(
         "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">\
          <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data: poezi:; form-action poezi: https: http:; base-uri 'none'\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
          <meta name=\"color-scheme\" content=\"light dark\"><title>{}</title><style>{STYLE}{WALLPAPER_STYLE}</style></head>\
-         <body class=\"{body_class}\"><main class=\"{class}\">{body}</main></body></html>",
-        escape(title)
+         <body class=\"{body_class} {}\"><main class=\"{class}\">{body}</main></body></html>",
+        escape(title),
+        body_anim_class()
     )
 }
 
@@ -201,7 +297,16 @@ fn search_form(config: &Config) -> String {
     )
 }
 
+thread_local! {
+    static ANIMATE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+fn body_anim_class() -> &'static str {
+    if ANIMATE.with(|a| a.get()) { "anim" } else { "" }
+}
+
 pub fn handle(uri: &str, app: &App) -> (String, Vec<u8>) {
+    ANIMATE.with(|a| a.set(app.config.borrow().animations));
     let rest = uri.trim_start_matches("poezi://");
     let page = rest.split(['?', '#', '/']).next().unwrap_or("");
     let params = query(uri);
@@ -252,7 +357,7 @@ fn wallpaper_css(config: &Config) -> Option<String> {
 
 fn start_page(app: &App) -> String {
     let config = app.config.borrow();
-    let tiles_html = favorite_tiles(app, Shelf::Normal);
+    let tiles_html = if config.start_show_favorites { favorite_tiles(app, Shelf::Normal) } else { String::new() };
     let wall = wallpaper_css(&config);
     layout_with(
         "Neuer Tab",
@@ -459,6 +564,30 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         c.autoplay_sound = flag("autoplay_sound");
         c.hardware_acceleration = flag("hardware_acceleration");
         c.download_dir = text("download_dir").unwrap_or_default();
+        c.download_ask = flag("download_ask");
+        c.download_rules_enabled = flag("download_rules_enabled");
+        {
+            let mut rules: Vec<config::DownloadRule> = Vec::new();
+            for i in 0..=c.download_rules.len() {
+                let sites = text(&format!("rule_sites_{i}")).unwrap_or_default();
+                let types = text(&format!("rule_types_{i}")).unwrap_or_default();
+                let folder = text(&format!("rule_folder_{i}")).unwrap_or_default();
+                let rule = config::DownloadRule { sites, types, folder };
+                if !rule.is_empty() {
+                    rules.push(rule);
+                }
+            }
+            c.download_rules = rules;
+        }
+        c.animations = flag("animations");
+        c.animation_speed = text("animation_speed").as_deref().and_then(config::AnimationSpeed::from_id).unwrap_or(config::AnimationSpeed::Normal);
+        c.start_show_favorites = flag("start_show_favorites");
+        c.https_only = flag("https_only");
+        c.https_exceptions = text("https_exceptions").unwrap_or_default().lines().map(|l| l.trim().trim_start_matches("www.").to_ascii_lowercase()).filter(|l| !l.is_empty()).collect();
+        c.javascript_jit = flag("javascript_jit");
+        c.webrtc = flag("webrtc");
+        c.local_network_protection = flag("local_network_protection");
+        c.video_mode = text("video_mode").as_deref().and_then(VideoMode::from_id).unwrap_or(VideoMode::Auto);
         c.theme = match text("theme").as_deref() {
             Some("light") => Theme::Light,
             Some("dark") => Theme::Dark,
@@ -523,6 +652,12 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
                 _ => c.permissions.push(p),
             }
         }
+        let old_certificates = std::mem::take(&mut c.allowed_certificates);
+        for (i, cert) in old_certificates.into_iter().enumerate() {
+            if text(&format!("cert_{i}")).as_deref() != Some("block") {
+                c.allowed_certificates.push(cert);
+            }
+        }
         c.proxy_ignore = text("proxy_ignore").unwrap_or_default().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
         let bridge_kind = text("tor_bridge_kind").as_deref().and_then(BridgeKind::from_id);
         c.tor_use_bridges = bridge_kind.is_some();
@@ -583,12 +718,21 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         row("Tabs beim Start wiederherstellen", "", format!("<input type=\"checkbox\" name=\"restore_session\"{}>", checked(c.restore_session))),
         row("Videos mit Ton automatisch abspielen *", "", format!("<input type=\"checkbox\" name=\"autoplay_sound\"{}>", checked(c.autoplay_sound))),
         row("Hardwarebeschleunigung *", "", format!("<input type=\"checkbox\" name=\"hardware_acceleration\"{}>", checked(c.hardware_acceleration))),
+        row("Video-Darstellung *", "Wenn Videos grün oder flackernd erscheinen (häufig bei NVIDIA): „Kompatibel“ oder „Software“ wählen", {
+            let opt = |v: &str, l: &str, sel: bool| format!("<option value=\"{v}\"{}>{l}</option>", if sel { " selected" } else { "" });
+            format!(
+                "<select name=\"video_mode\">{}{}{}{}</select>",
+                opt("auto", "Automatisch (empfohlen)", c.video_mode == VideoMode::Auto),
+                opt("compatible", "Kompatibel – ohne GL-Video-Sink", c.video_mode == VideoMode::Compatible),
+                opt("software", "Software-Video – größte Kompatibilität", c.video_mode == VideoMode::Software),
+                opt("gpu", "GPU – volle Beschleunigung", c.video_mode == VideoMode::Gpu)
+            )
+        }),
         row("Schnelle Werbeblocker-Regeln", "Nur seitenspezifische Ausblende-Regeln – große Seiten bauen spürbar schneller auf, Werbung wird weiter geblockt", format!("<input type=\"checkbox\" name=\"cosmetic_fast\"{}>", checked(c.cosmetic_fast))),
         row("Neue Tabs vorladen *", "Hält einen Web-Prozess bereit, damit neue Tabs sofort starten (ca. 60 MB RAM)", format!("<input type=\"checkbox\" name=\"prewarm\"{}>", checked(c.prewarm))),
         row("Vorschläge in der Adressleiste", "Zeigt beim Tippen passende Favoriten und Seiten aus dem Verlauf", format!("<input type=\"checkbox\" name=\"address_suggestions\"{}>", checked(c.address_suggestions))),
         row("Hinweis auf fehlende Video-Plugins ausblenden", "", format!("<input type=\"checkbox\" name=\"ignore_media_warning\"{}>", checked(c.ignore_media_warning))),
         row("Standard-Zoom (%)", "", format!("<input type=\"number\" min=\"30\" max=\"300\" name=\"default_zoom\" value=\"{}\">", (c.default_zoom * 100.0).round())),
-        row("Download-Ordner", "Leer = Standard-Downloadordner", format!("<input type=\"text\" name=\"download_dir\" value=\"{}\" placeholder=\"{}\">", escape(&c.download_dir), escape(&c.download_dir().to_string_lossy()))),
     ];
     let theme_option = |value: &str, label: &str, theme: Theme| {
         format!("<option value=\"{value}\"{}>{label}</option>", if c.theme == theme { " selected" } else { "" })
@@ -743,7 +887,48 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
             })
             .collect()
     };
+    let certificate_rows: String = if c.allowed_certificates.is_empty() {
+        row("Zugelassene Zertifikate", "Keine – ungültige Zertifikate werden immer blockiert. Bei einer Warnung kannst du mit „Trotzdem zulassen“ eine Ausnahme machen", String::new())
+    } else {
+        c.allowed_certificates
+            .iter()
+            .enumerate()
+            .map(|(i, cert)| {
+                let fingerprint = cert.fingerprint();
+                row(
+                    &escape(&cert.host),
+                    &format!("Ungültiges Zertifikat zugelassen · SHA-256 <code title=\"{fingerprint}\">{}…</code>", &fingerprint[..fingerprint.len().min(23)]),
+                    select(&format!("cert_{i}"), &[("allow", "Zugelassen", true), ("block", "Wieder blockieren", false)]),
+                )
+            })
+            .collect()
+    };
     let security_rows = [
+        row(
+            "Nur HTTPS",
+            "Unverschlüsselte Seiten werden auf HTTPS umgestellt; klappt das nicht, kommt eine Warnung statt der Seite. Schützt vor Mitlesen und Manipulation im Netz",
+            format!("<input type=\"checkbox\" name=\"https_only\"{}>", checked(c.https_only)),
+        ),
+        row(
+            "HTTPS-Ausnahmen",
+            "Eine Domain pro Zeile, die auch über HTTP laden darf (z. B. Geräte im Heimnetz)",
+            format!("<textarea name=\"https_exceptions\">{}</textarea>", escape(&c.https_exceptions.join("\n"))),
+        ),
+        row(
+            "WebRTC *",
+            "WebRTC kann für Videochats deine echte IP-Adresse preisgeben (auch hinter Proxy). Aus, wenn du es nicht brauchst. In Tor-Tabs und bei „Streng“ immer aus",
+            format!("<input type=\"checkbox\" name=\"webrtc\"{}>", checked(c.webrtc)),
+        ),
+        row(
+            "Schutz des lokalen Netzwerks *",
+            "Verhindert, dass Webseiten im Hintergrund deinen Router oder Geräte im Heimnetz (127.0.0.1, 192.168.x, 10.x) abfragen – ein häufiger Angriffsweg (CSRF/SSRF)",
+            format!("<input type=\"checkbox\" name=\"local_network_protection\"{}>", checked(c.local_network_protection)),
+        ),
+        row(
+            "JavaScript-JIT *",
+            "Der JIT macht JavaScript schneller, ist aber eine häufige Angriffsfläche. Aus = etwas langsamer, aber härter. In Tor-Tabs ratsam",
+            format!("<input type=\"checkbox\" name=\"javascript_jit\"{}>", checked(c.javascript_jit)),
+        ),
         row(
             "Logins merken",
             "Cookies werden verschlüsselt gespeichert (ChaCha20-Poly1305, Schlüssel im TPM-Chip bzw. Schlüsselbund) – nie im Klartext auf der Festplatte. So bleibst du z. B. bei GitHub angemeldet",
@@ -788,6 +973,30 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
             "Kamera, Mikrofon, Standort und Benachrichtigungen pro Seite merken statt jedes Mal zu fragen",
             format!("<input type=\"checkbox\" name=\"remember_permissions\"{}>", checked(c.remember_permissions)),
         ),
+    ];
+    let rule_inputs: String = c
+        .download_rules
+        .iter()
+        .map(Some)
+        .chain(std::iter::once(None))
+        .enumerate()
+        .map(|(i, rule)| {
+            let r = rule.cloned().unwrap_or_default();
+            format!(
+                "<div class=\"rule\"><input type=\"text\" name=\"rule_sites_{i}\" value=\"{}\" placeholder=\"Seiten, z. B. mp3.cc (leer = alle)\">\
+                 <input type=\"text\" name=\"rule_types_{i}\" value=\"{}\" placeholder=\"Typen, z. B. mp3, flac\">\
+                 <input type=\"text\" name=\"rule_folder_{i}\" value=\"{}\" placeholder=\"Ordner, z. B. ~/Musik\"></div>",
+                escape(&r.sites),
+                escape(&r.types),
+                escape(&r.folder)
+            )
+        })
+        .collect();
+    let download_rows = [
+        row("Download-Ordner", "Leer = Standard-Downloadordner", format!("<input type=\"text\" name=\"download_dir\" value=\"{}\" placeholder=\"{}\">", escape(&c.download_dir), escape(&c.download_dir().to_string_lossy()))),
+        row("Beim Herunterladen nach Ort fragen", "Zeigt den Speichern-Dialog deines Systems. Aus = direkt in den Download-Ordner", format!("<input type=\"checkbox\" name=\"download_ask\"{}>", checked(c.download_ask))),
+        row("Ordner-Regeln verwenden", "Bestimmte Seiten oder Dateitypen landen ohne Nachfrage im gewählten Ordner – spart das ständige Ordnersuchen", format!("<input type=\"checkbox\" name=\"download_rules_enabled\"{}>", checked(c.download_rules_enabled))),
+        row("Regeln", "Pro Zeile: Seiten (kommagetrennt, leer = alle), Dateitypen (kommagetrennt, leer = alle), Zielordner. Eine Regel greift, wenn Seite und Typ passen", format!("<div class=\"rules\">{rule_inputs}</div>")),
     ];
     let password_rows = [
         row("Passwortmanager", "KeePassXC-Datenbank oder eigener Manager", escape(&app.passwords.status_text())),
@@ -843,34 +1052,48 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
             format!("<input type=\"number\" min=\"1\" max=\"60\" name=\"titlebar_fps\" value=\"{}\">", c.titlebar_fps),
         ),
         row("Favoritenleiste", "Deine Lesezeichen unter der Adressleiste", format!("<input type=\"checkbox\" name=\"show_favorites\"{}>", checked(c.show_favorites))),
+        row("Favoriten auf der Startseite", "Die Kacheln mit deinen Lesezeichen auf neuen Tabs", format!("<input type=\"checkbox\" name=\"start_show_favorites\"{}>", checked(c.start_show_favorites))),
         row("Seitenleiste links", "Lesezeichen, Verlauf, Downloads, Tor und mehr", format!("<input type=\"checkbox\" name=\"show_sidebar\"{}>", checked(c.show_sidebar))),
+        row("Animationen", "Sanfte Übergänge für Seitenleiste, Panels, Menüs und Popups. Aus wirkt schneller und spart Rechenzeit", format!("<input type=\"checkbox\" name=\"animations\"{}>", checked(c.animations))),
+        row("Tempo der Animationen", "", select("animation_speed", &[
+            ("fast", "Schnell", c.animation_speed == config::AnimationSpeed::Fast),
+            ("normal", "Normal", c.animation_speed == config::AnimationSpeed::Normal),
+            ("slow", "Langsam", c.animation_speed == config::AnimationSpeed::Slow),
+        ])),
     ];
-    layout(
-        "Einstellungen",
-        "",
-        &format!(
-            "<h1>Einstellungen</h1>{notice}<form action=\"poezi://settings\" method=\"get\">\
-             <input type=\"hidden\" name=\"token\" value=\"{}\"><input type=\"hidden\" name=\"save\" value=\"1\">\
-             <h2>Erscheinungsbild</h2><div class=\"settings\">{}</div>\
-             <h2 id=\"hintergrund\">Hintergrund</h2><div class=\"settings\">{}</div>\
-             <h2 id=\"privatsphaere\">Privatsphäre</h2><div class=\"settings\">{}</div>\
-             <h2 id=\"sicherheit\">Sicherheit</h2><div class=\"settings\">{}</div>\
-             <h2 id=\"berechtigungen\">Website-Berechtigungen</h2><div class=\"settings\">{}</div>\
-             <h2 id=\"tor\">Tor-Modus</h2><div class=\"settings\">{}</div>\
-             <h2 id=\"passwoerter\">Passwörter</h2><div class=\"settings\">{}</div>\
-             <h2>Browser</h2><div class=\"settings\">{}</div>\
-             <p><button type=\"submit\">Speichern</button></p></form>",
-            app.token,
-            appearance.concat(),
-            wallpaper_rows.concat(),
-            privacy_rows.concat(),
-            security_rows.concat(),
-            permission_rows,
-            tor_rows.concat(),
-            password_rows.concat(),
-            rows.concat()
-        ),
-    )
+    let chapters = [
+        ("erscheinungsbild", "Erscheinungsbild", appearance.concat()),
+        ("hintergrund", "Hintergrund", wallpaper_rows.concat()),
+        ("privatsphaere", "Privatsphäre", privacy_rows.concat()),
+        ("sicherheit", "Sicherheit", security_rows.concat()),
+        ("downloads", "Downloads", download_rows.concat()),
+        ("zertifikate", "Zertifikate", certificate_rows),
+        ("berechtigungen", "Berechtigungen", permission_rows),
+        ("tor", "Tor-Modus", tor_rows.concat()),
+        ("passwoerter", "Passwörter", password_rows.concat()),
+        ("browser", "Browser", rows.concat()),
+    ];
+    let nav: String = chapters
+        .iter()
+        .map(|(id, title, _)| format!("<a class=\"chip\" href=\"#{id}\" data-nav=\"{id}\">{title}</a>"))
+        .collect();
+    let sections: String = chapters
+        .iter()
+        .map(|(id, title, body)| format!("<section class=\"chapter\" id=\"{id}\" data-chapter=\"{id}\"><h2>{title}</h2><div class=\"settings\">{body}</div></section>"))
+        .collect();
+    let nonce = crate::app::random_token();
+    let body = format!(
+        "<h1>Einstellungen</h1>{notice}\
+         <div class=\"settings-nav\"><input type=\"search\" id=\"settings-search\" placeholder=\"Einstellungen durchsuchen …\" autocomplete=\"off\">\
+         <div class=\"chips\">{nav}</div></div>\
+         <form action=\"poezi://settings\" method=\"get\">\
+         <input type=\"hidden\" name=\"token\" value=\"{}\"><input type=\"hidden\" name=\"save\" value=\"1\">{sections}\
+         <p id=\"settings-empty\" class=\"muted\" hidden>Keine passende Einstellung.</p>\
+         <p class=\"save-bar\"><button type=\"submit\">Speichern</button></p></form>\
+         <script nonce=\"{nonce}\">{SETTINGS_JS}</script>",
+        app.token
+    );
+    layout_scripted("Einstellungen", &nonce, &body)
 }
 
 fn about_page(app: &App) -> String {

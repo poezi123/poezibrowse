@@ -18,6 +18,7 @@ pub enum PageEvent {
     AudioChanged,
     Crashed(String),
     Blocked(String),
+    Request(crate::intercept::RequestRecord),
     CloseRequested,
 }
 

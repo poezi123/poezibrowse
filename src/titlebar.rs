@@ -15,15 +15,30 @@ thread_local! {
         cairo::ImageSurface::create_from_png(&mut std::io::Cursor::new(TEXTURE)).ok();
 }
 
-#[derive(Default)]
 struct State {
     pattern: bool,
     animation: bool,
+    active: bool,
     fps: u32,
     mode: Option<Mode>,
     offset: f64,
     last_us: i64,
     tick: Option<gtk::TickCallbackId>,
+}
+
+impl Default for State {
+    fn default() -> State {
+        State {
+            pattern: false,
+            animation: false,
+            active: true,
+            fps: 16,
+            mode: None,
+            offset: 0.0,
+            last_us: 0,
+            tick: None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -53,13 +68,29 @@ impl TitleBar {
         }
     }
 
+    pub fn set_active(&self, active: bool) {
+        if self.state.borrow().active == active {
+            return;
+        }
+        self.state.borrow_mut().active = active;
+        self.sync_tick();
+    }
+
     pub fn apply(&self, config: &Config) {
-        let animate = {
+        {
             let mut s = self.state.borrow_mut();
             s.pattern = config.titlebar_pattern;
             s.animation = config.titlebar_animation;
             s.fps = config.titlebar_fps.clamp(1, 60);
-            s.pattern && s.animation
+        }
+        self.sync_tick();
+        self.header.queue_draw();
+    }
+
+    fn sync_tick(&self) {
+        let animate = {
+            let s = self.state.borrow();
+            s.pattern && s.animation && s.active
         };
         let running = self.state.borrow().tick.is_some();
         if animate && !running {

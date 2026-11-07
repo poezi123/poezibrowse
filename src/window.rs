@@ -16,6 +16,7 @@ use crate::tab::{Snapshot, Tab};
 use crate::titlebar::TitleBar;
 
 const TAB_TARGET: &str = "application/x-poezibrowse-tab";
+const FAVORITE_TARGET: &str = "application/x-poezibrowse-favorite";
 
 pub struct BrowserWindow {
     me: Weak<BrowserWindow>,
@@ -38,7 +39,17 @@ pub struct BrowserWindow {
     suggestions: gtk::ListStore,
     favorites_bar: gtk::Box,
     favorites: gtk::Box,
+    favorites_scroll: gtk::ScrolledWindow,
+    favorites_more: gtk::MenuButton,
+    favorites_overflow: gtk::Box,
+    favorite_buttons: RefCell<Vec<(String, gtk::Button, i32)>>,
+    favorites_fit_pending: Cell<bool>,
     strip: gtk::Box,
+    dock: gtk::Box,
+    dock_stack: gtk::Stack,
+    dock_toggles: Vec<(String, gtk::ToggleButton)>,
+    intercept: RefCell<Option<Rc<crate::intercept::Intercept>>>,
+    terminal_loaded: Cell<bool>,
     tabs_box: gtk::Box,
     strip_scroll: gtk::ScrolledWindow,
     sidebar: gtk::Box,
@@ -52,6 +63,11 @@ pub struct BrowserWindow {
     closed: RefCell<Vec<Snapshot>>,
     fullscreen: Cell<bool>,
     dragged_tab: Cell<Option<u64>>,
+    view_stack: gtk::Stack,
+    split_paned: gtk::Paned,
+    split: RefCell<Option<(u64, u64)>>,
+    split_exit: gtk::Button,
+    reparenting: Cell<bool>,
     syncing_toggles: Cell<bool>,
     favorites_shelf: Cell<Shelf>,
 }
@@ -132,6 +148,28 @@ impl BrowserWindow {
         let favorites_bar = gtk::Box::new(Orientation::Horizontal, 0);
         favorites_bar.style_context().add_class("favorites-bar");
         favorites_bar.pack_start(&favorites_scroll, true, true, 0);
+        let favorites_overflow = gtk::Box::new(Orientation::Vertical, 0);
+        favorites_overflow.style_context().add_class("favorites-overflow");
+        let overflow_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vscrollbar_policy(gtk::PolicyType::Automatic)
+            .propagate_natural_height(true)
+            .max_content_height(520)
+            .build();
+        overflow_scroll.add(&favorites_overflow);
+        overflow_scroll.show_all();
+        let overflow_popover = gtk::Popover::new(None::<&gtk::Widget>);
+        overflow_popover.style_context().add_class("favorites-popover");
+        overflow_popover.add(&overflow_scroll);
+        let favorites_more = gtk::MenuButton::new();
+        favorites_more.set_relief(gtk::ReliefStyle::None);
+        favorites_more.style_context().add_class("favorite");
+        favorites_more.style_context().add_class("favorites-more");
+        favorites_more.set_tooltip_text(Some("Weitere Favoriten"));
+        favorites_more.add(&gtk::Image::from_icon_name(Some("pan-down-symbolic"), gtk::IconSize::Menu));
+        favorites_more.set_popover(Some(&overflow_popover));
+        favorites_more.set_no_show_all(true);
+        favorites_bar.pack_end(&favorites_more, false, false, 0);
 
         let tabs_box = gtk::Box::new(Orientation::Horizontal, 2);
         let new_tab = icon_button("list-add-symbolic", "Neuer Tab (Strg+T)");
@@ -150,10 +188,16 @@ impl BrowserWindow {
         let ram_label = gtk::Label::new(None);
         ram_label.style_context().add_class("ram-label");
         ram_label.set_tooltip_text(Some("Arbeitsspeicher von PoeziBrowse insgesamt (alle Prozesse)"));
+        let split_exit = gtk::Button::with_label("⊟ Teilen beenden");
+        split_exit.set_relief(gtk::ReliefStyle::None);
+        split_exit.set_tooltip_text(Some("Geteilte Ansicht beenden"));
+        split_exit.style_context().add_class("split-exit");
+        split_exit.set_no_show_all(true);
         let strip = gtk::Box::new(Orientation::Horizontal, 6);
         strip.style_context().add_class("tab-strip");
         strip.pack_start(&strip_scroll, true, true, 0);
         strip.pack_end(&ram_label, false, false, 0);
+        strip.pack_end(&split_exit, false, false, 0);
 
         let notebook = gtk::Notebook::new();
         notebook.set_show_tabs(false);
@@ -172,6 +216,16 @@ impl BrowserWindow {
         overlay.add_overlay(&status);
         overlay.set_overlay_pass_through(&status, true);
 
+        let split_paned = gtk::Paned::new(Orientation::Horizontal);
+        split_paned.set_wide_handle(true);
+        split_paned.style_context().add_class("poezi-split");
+        let view_stack = gtk::Stack::new();
+        view_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+        view_stack.set_transition_duration(160);
+        view_stack.add_named(&overlay, "normal");
+        view_stack.add_named(&split_paned, "split");
+        view_stack.set_visible_child_name("normal");
+
         let bookmarks_panel = sidebar::panel("Lesezeichen", true, "Noch keine Lesezeichen.\nKlicke auf den Stern in der Adressleiste.");
         let history_panel = sidebar::panel("Verlauf", true, "Der Verlauf ist leer.");
         let clear_history = gtk::Button::with_label("Verlauf löschen");
@@ -186,6 +240,8 @@ impl BrowserWindow {
         panel_stack.add_named(&history_panel.root, "history");
         panel_stack.add_named(&downloads_panel.root, "downloads");
         panel_stack.set_hhomogeneous(false);
+        panel_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+        panel_stack.set_transition_duration(150);
         let panel_holder = gtk::Box::new(Orientation::Vertical, 0);
         panel_holder.set_size_request(300, -1);
         panel_holder.set_hexpand(false);
@@ -204,6 +260,16 @@ impl BrowserWindow {
             let toggle = sidebar::toggle(&icon, tip, scale);
             sidebar.pack_start(&toggle, false, false, 0);
             panel_toggles.push((name.to_string(), toggle));
+        }
+        sidebar.pack_start(&gtk::Separator::new(Orientation::Horizontal), false, false, 4);
+        let mut dock_toggles = Vec::new();
+        for (name, icon, tip) in [
+            ("intercept", Icon::Theme("network-transmit-receive-symbolic"), "PoeziIntercept – Requests, Repeater, Intruder"),
+            ("terminal", Icon::Theme("utilities-terminal-symbolic"), "Terminal"),
+        ] {
+            let toggle = sidebar::toggle(&icon, tip, scale);
+            sidebar.pack_start(&toggle, false, false, 0);
+            dock_toggles.push((name.to_string(), toggle));
         }
         sidebar.pack_start(&gtk::Separator::new(Orientation::Horizontal), false, false, 4);
         for (action, icon, tip) in [
@@ -248,10 +314,22 @@ impl BrowserWindow {
         find_revealer.set_transition_type(gtk::RevealerTransitionType::SlideUp);
         find_revealer.add(&find_box);
 
+        let dock_stack = gtk::Stack::new();
+        dock_stack.set_hhomogeneous(false);
+        dock_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+        dock_stack.set_transition_duration(150);
+        let dock = gtk::Box::new(Orientation::Vertical, 0);
+        dock.style_context().add_class("dock");
+        dock.pack_start(&dock_stack, true, true, 0);
+        dock.set_no_show_all(true);
+        let split = gtk::Paned::new(Orientation::Horizontal);
+        split.pack1(&view_stack, true, true);
+        split.pack2(&dock, false, false);
+
         let prompt_holder = gtk::Box::new(Orientation::Vertical, 0);
         let content = gtk::Box::new(Orientation::Vertical, 0);
         content.pack_start(&prompt_holder, false, false, 0);
-        content.pack_start(&overlay, true, true, 0);
+        content.pack_start(&split, true, true, 0);
         content.pack_start(&find_revealer, false, false, 0);
         let body = gtk::Box::new(Orientation::Horizontal, 0);
         body.pack_start(&sidebar, false, false, 0);
@@ -284,7 +362,17 @@ impl BrowserWindow {
             suggestions,
             favorites_bar,
             favorites,
+            favorites_scroll: favorites_scroll.clone(),
+            favorites_more,
+            favorites_overflow,
+            favorite_buttons: RefCell::new(Vec::new()),
+            favorites_fit_pending: Cell::new(false),
             strip,
+            dock: dock.clone(),
+            dock_stack: dock_stack.clone(),
+            dock_toggles,
+            intercept: RefCell::new(None),
+            terminal_loaded: Cell::new(false),
             tabs_box,
             strip_scroll,
             sidebar,
@@ -298,6 +386,11 @@ impl BrowserWindow {
             closed: RefCell::new(Vec::new()),
             fullscreen: Cell::new(false),
             dragged_tab: Cell::new(None),
+            view_stack,
+            split_paned,
+            split: RefCell::new(None),
+            split_exit,
+            reparenting: Cell::new(false),
             syncing_toggles: Cell::new(false),
             favorites_shelf: Cell::new(Shelf::Normal),
         });
@@ -306,6 +399,23 @@ impl BrowserWindow {
         this.add_actions();
         this.window.show_all();
         this.rebuild_favorites();
+        this.apply_animation_speed(&app.config.borrow());
+        let w = this.weak();
+        this.window.connect_is_active_notify(move |win| with(&w, |w| w.titlebar.set_active(win.is_active())));
+        let w = this.weak();
+        this.split_exit.connect_clicked(move |_| with(&w, |w| w.exit_split()));
+        let w = this.weak();
+        this.favorites_scroll.connect_size_allocate(move |_, _| with(&w, |w| w.schedule_favorites_fit()));
+        let w = this.weak();
+        let targets = [gtk::TargetEntry::new(FAVORITE_TARGET, gtk::TargetFlags::SAME_APP, 0)];
+        this.favorites_more.drag_dest_set(gtk::DestDefaults::ALL, &targets, gtk::gdk::DragAction::MOVE);
+        this.favorites_more.connect_drag_data_received(move |_, _, _, _, data, _, _| {
+            let source = String::from_utf8_lossy(&data.data()).to_string();
+            with(&w, |w| {
+                w.app.storage.move_bookmark(w.favorites_shelf.get(), &source, None);
+                w.app.bookmarks_changed();
+            });
+        });
         this.layout_changed();
         this
     }
@@ -382,7 +492,13 @@ impl BrowserWindow {
         let w = self.weak();
         self.notebook.connect_switch_page(move |_, child, _| {
             with(&w, |w| {
+                if w.reparenting.get() {
+                    return;
+                }
                 if let Some(tab) = w.tab_by_widget(child) {
+                    if w.split.borrow().is_some() && !w.split_contains(tab.id) {
+                        w.exit_split();
+                    }
                     tab.last_active.set(Instant::now());
                     if tab.is_sleeping() {
                         w.wake(&tab);
@@ -464,7 +580,113 @@ impl BrowserWindow {
         });
     }
 
+    fn connect_dock(self: &Rc<Self>) {
+        for (name, toggle) in &self.dock_toggles {
+            let w = self.weak();
+            let name = name.clone();
+            toggle.connect_toggled(move |toggle| {
+                with(&w, |w| {
+                    if w.syncing_toggles.get() {
+                        return;
+                    }
+                    if toggle.is_active() {
+                        w.show_tool(&name);
+                    } else {
+                        w.hide_dock();
+                    }
+                })
+            });
+        }
+    }
+
+    fn show_tool(self: &Rc<Self>, name: &str) {
+        self.syncing_toggles.set(true);
+        for (n, toggle) in &self.dock_toggles {
+            toggle.set_active(n == name);
+        }
+        self.syncing_toggles.set(false);
+        if name == "intercept" && self.intercept.borrow().is_none() {
+            let app = self.app.clone();
+            let on_toggle: Rc<dyn Fn(bool)> = Rc::new(move |on| {
+                for engine in app.engines() {
+                    engine.intercepting.set(on);
+                }
+            });
+            let intercept = crate::intercept::Intercept::new(on_toggle);
+            self.dock_stack.add_named(&intercept.root, "intercept");
+            *self.intercept.borrow_mut() = Some(intercept);
+            let weak = self.weak();
+            let route: Rc<dyn Fn(crate::engine::webkit::Held)> = Rc::new(move |held| {
+                if let Some(w) = weak.upgrade() {
+                    if let Some(panel) = w.intercept.borrow().as_ref() {
+                        if panel.is_intercepting() {
+                            panel.push_held(held);
+                            return;
+                        }
+                    }
+                }
+                held.forward();
+            });
+            for engine in self.app.engines() {
+                *engine.on_intercept.borrow_mut() = Some(route.clone());
+            }
+        }
+        if name == "terminal" && !self.terminal_loaded.get() {
+            let term = crate::terminal::pane();
+            self.dock_stack.add_named(&term, "terminal");
+            term.show_all();
+            self.terminal_loaded.set(true);
+        }
+        if name == "intercept" {
+            for engine in self.app.engines() {
+                engine.log_requests.set(true);
+            }
+        } else {
+            self.deactivate_intercept();
+        }
+        self.dock_stack.set_visible_child_name(name);
+        if self.dock.allocated_width() < 2 {
+            let total = self.window.allocated_width().max(900);
+            if let Some(split) = self.dock.parent().and_then(|p| p.downcast::<gtk::Paned>().ok()) {
+                split.set_position(total * 3 / 5);
+            }
+        }
+        self.dock.set_visible(true);
+        self.dock.show();
+        self.dock_stack.show();
+        if let Some(child) = self.dock_stack.visible_child() {
+            child.show();
+        }
+    }
+
+    fn hide_dock(self: &Rc<Self>) {
+        self.dock.hide();
+        self.syncing_toggles.set(true);
+        for (_, toggle) in &self.dock_toggles {
+            toggle.set_active(false);
+        }
+        self.syncing_toggles.set(false);
+        self.deactivate_intercept();
+    }
+
+    fn deactivate_intercept(&self) {
+        if let Some(panel) = self.intercept.borrow().as_ref() {
+            panel.shutdown();
+        }
+        for engine in self.app.engines() {
+            engine.log_requests.set(false);
+            engine.intercepting.set(false);
+        }
+    }
+
+    pub fn log_request(&self, rec: crate::intercept::RequestRecord) {
+        if let Some(intercept) = self.intercept.borrow().as_ref() {
+            intercept.log_request(rec);
+        }
+    }
+
     fn connect_panels(self: &Rc<Self>, clear_history: &gtk::Button, open_folder: &gtk::Button) {
+        self.connect_dock();
         for (name, toggle) in &self.panel_toggles {
             let w = self.weak();
             let name = name.clone();
@@ -627,6 +849,9 @@ impl BrowserWindow {
             let (Some(w), Some(t)) = (w.upgrade(), t.upgrade()) else { return glib::Propagation::Proceed };
             match event.button() {
                 1 => {
+                    if w.split.borrow().is_some() && !w.split_contains(t.id) {
+                        w.exit_split();
+                    }
                     if let Some(n) = w.notebook.page_num(&t.container) {
                         w.notebook.set_current_page(Some(n));
                     }
@@ -663,7 +888,14 @@ impl BrowserWindow {
         tab.label.drag_dest_set(gtk::DestDefaults::ALL, &targets, gtk::gdk::DragAction::MOVE);
         let w = self.weak();
         let id = tab.id;
-        tab.label.connect_drag_begin(move |_, _| with(&w, |w| w.dragged_tab.set(Some(id))));
+        tab.label.connect_drag_begin(move |_, _| {
+            with(&w, |w| {
+                if w.split_contains(id) {
+                    w.exit_split();
+                }
+                w.dragged_tab.set(Some(id));
+            })
+        });
         tab.label.connect_drag_data_get(move |_, _, data, _, _| {
             data.set(&data.target(), 8, id.to_string().as_bytes());
         });
@@ -678,8 +910,16 @@ impl BrowserWindow {
                 return;
             }
             let Some(source) = w.tabs.borrow().iter().find(|t| t.id == source_id).cloned() else { return };
+            if target.mode != source.mode {
+                return;
+            }
+            let width = label.allocated_width().max(1);
+            if x > width / 4 && x < width * 3 / 4 {
+                w.enter_split(&source, &target);
+                return;
+            }
             let Some(mut index) = w.notebook.page_num(&target.container) else { return };
-            if x > label.allocated_width() / 2 {
+            if x > width / 2 {
                 index += 1;
             }
             let from = w.notebook.page_num(&source.container).unwrap_or(0);
@@ -694,6 +934,89 @@ impl BrowserWindow {
         self.notebook.reorder_child(&tab.container, Some(index));
         self.tabs_box.reorder_child(&tab.label, index as i32);
         self.app.session_changed();
+    }
+
+    fn tab_by_id(&self, id: u64) -> Option<Rc<Tab>> {
+        self.tabs.borrow().iter().find(|t| t.id == id).cloned()
+    }
+
+    fn enter_split(self: &Rc<Self>, left: &Rc<Tab>, right: &Rc<Tab>) {
+        if left.id == right.id {
+            return;
+        }
+        self.exit_split();
+        for tab in [left, right] {
+            if tab.is_sleeping() {
+                self.wake(tab);
+            }
+        }
+        self.reparenting.set(true);
+        for tab in [left, right] {
+            if let Some(n) = self.notebook.page_num(&tab.container) {
+                self.notebook.remove_page(Some(n));
+            }
+        }
+        self.split_paned.pack1(&left.container, true, true);
+        self.split_paned.pack2(&right.container, true, true);
+        left.container.show();
+        right.container.show();
+        left.set_split(true);
+        right.set_split(true);
+        left.set_active(true);
+        right.set_active(true);
+        *self.split.borrow_mut() = Some((left.id, right.id));
+        self.split_exit.show();
+        self.view_stack.set_visible_child_name("split");
+        let w = self.weak();
+        glib::idle_add_local_once(move || {
+            with(&w, |w| {
+                let width = w.split_paned.allocated_width();
+                if width > 2 {
+                    w.split_paned.set_position(width / 2);
+                }
+            })
+        });
+        self.reparenting.set(false);
+        self.update_toolbar();
+    }
+
+    pub fn exit_split(self: &Rc<Self>) {
+        let Some((left_id, right_id)) = self.split.borrow_mut().take() else { return };
+        self.reparenting.set(true);
+        for id in [left_id, right_id] {
+            if let Some(tab) = self.tab_by_id(id) {
+                if tab.container.parent().as_ref() == Some(self.split_paned.upcast_ref::<gtk::Widget>()) {
+                    self.split_paned.remove(&tab.container);
+                }
+                if self.notebook.page_num(&tab.container).is_none() {
+                    self.notebook.append_page(&tab.container, None::<&gtk::Widget>);
+                }
+                tab.set_split(false);
+            }
+        }
+        self.sync_notebook_order();
+        self.split_exit.hide();
+        self.view_stack.set_visible_child_name("normal");
+        self.reparenting.set(false);
+        if let Some(tab) = self.tab_by_id(left_id) {
+            if let Some(n) = self.notebook.page_num(&tab.container) {
+                self.notebook.set_current_page(Some(n));
+            }
+        }
+    }
+
+    fn sync_notebook_order(&self) {
+        let mut index = 0u32;
+        for tab in self.tabs.borrow().iter() {
+            if self.notebook.page_num(&tab.container).is_some() {
+                self.notebook.reorder_child(&tab.container, Some(index));
+                index += 1;
+            }
+        }
+    }
+
+    fn split_contains(&self, id: u64) -> bool {
+        matches!(*self.split.borrow(), Some((a, b)) if a == id || b == id)
     }
 
     fn move_current_tab(&self, delta: i32) {
@@ -776,6 +1099,9 @@ impl BrowserWindow {
     }
 
     pub fn current_tab(&self) -> Option<Rc<Tab>> {
+        if let Some((left, _)) = *self.split.borrow() {
+            return self.tab_by_id(left);
+        }
         let n = self.notebook.current_page()?;
         let widget = self.notebook.nth_page(Some(n))?;
         self.tab_by_widget(&widget)
@@ -786,6 +1112,9 @@ impl BrowserWindow {
     }
 
     pub fn close_tab(self: &Rc<Self>, tab: &Rc<Tab>) {
+        if self.split_contains(tab.id) {
+            self.exit_split();
+        }
         let uri = tab.uri();
         if tab.mode == Mode::Normal && !uri.is_empty() {
             let snapshot = match tab.page.borrow().as_ref() {
@@ -1016,6 +1345,9 @@ impl BrowserWindow {
                     self.window.unfullscreen();
                 }
             }
+            PageEvent::Request(rec) => {
+                self.log_request(rec);
+            }
             PageEvent::Blocked(uri) => {
                 if is_current {
                     let host = config::host_of(&uri).unwrap_or_default();
@@ -1123,6 +1455,15 @@ impl BrowserWindow {
                 self.open_tab(uri, false);
             }
         }
+    }
+
+    pub fn window_is_active(&self) -> bool {
+        self.window.is_active()
+    }
+
+    pub fn apply_animation_speed(&self, config: &crate::config::Config) {
+        let ms = config.animation_speed.millis();
+        self.find_revealer.set_transition_duration(ms);
     }
 
     pub fn update_toolbar(&self) {
@@ -1318,7 +1659,7 @@ impl BrowserWindow {
         }
         let search = self.bookmarks_panel.search.as_ref().map(|s| s.text().to_lowercase()).unwrap_or_default();
         let shelf = Shelf::from(self.current_mode());
-        for e in self.app.storage.bookmarks(shelf) {
+        for e in self.app.storage.bookmarks(shelf).into_iter().rev() {
             if !search.is_empty() && !e.title.to_lowercase().contains(&search) && !e.url.to_lowercase().contains(&search) {
                 continue;
             }
@@ -1399,6 +1740,7 @@ impl BrowserWindow {
         for child in self.favorites.children() {
             self.favorites.remove(&child);
         }
+        self.favorite_buttons.borrow_mut().clear();
         let shelf = Shelf::from(self.current_mode());
         self.favorites_shelf.set(shelf);
         let bookmarks = self.app.storage.bookmarks(shelf);
@@ -1413,38 +1755,60 @@ impl BrowserWindow {
         }
         let favicons = if shelf == Shelf::Tor { None } else { self.app.favicon_database() };
         for e in bookmarks.into_iter().rev() {
-            let button = gtk::Button::new();
-            button.set_relief(gtk::ReliefStyle::None);
-            button.style_context().add_class("favorite");
-            button.set_tooltip_text(Some(&format!("{}\n{}", e.title, e.url)));
-            let bx = gtk::Box::new(Orientation::Horizontal, 6);
-            let icon = gtk::Image::from_icon_name(Some("starred-symbolic"), gtk::IconSize::Menu);
-            let label = gtk::Label::new(Some(if e.title.trim().is_empty() { &e.url } else { &e.title }));
-            label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            label.set_max_width_chars(18);
-            bx.pack_start(&icon, false, false, 0);
-            bx.pack_start(&label, false, false, 0);
-            button.add(&bx);
-            if let Some(db) = &favicons {
-                let icon = icon.clone();
-                let scale = self.window.scale_factor();
-                webkit2gtk::FaviconDatabaseExt::favicon(db, &e.url, None::<&gio::Cancellable>, move |result| {
-                    if let Ok(surface) = result {
-                        if let Ok(image) = gtk::cairo::ImageSurface::try_from(surface) {
-                            if let Some(pixbuf) = gtk::gdk::pixbuf_get_from_surface(&image, 0, 0, image.width(), image.height()) {
-                                let size = 16 * scale;
-                                if let Some(scaled) = pixbuf.scale_simple(size, size, gtk::gdk_pixbuf::InterpType::Bilinear) {
-                                    icon.set_from_pixbuf(Some(&scaled));
-                                }
+            let button = self.favorite_button(&e, favicons.as_ref(), false);
+            self.favorites.pack_start(&button, false, false, 0);
+            button.show_all();
+            let width = button.preferred_width().1;
+            self.favorite_buttons.borrow_mut().push((e.url.clone(), button, width));
+        }
+        self.favorites.show_all();
+        self.rebuild_favorites_overflow(0);
+        self.schedule_favorites_fit();
+    }
+
+    fn favorite_button(self: &Rc<Self>, e: &crate::storage::Entry, favicons: Option<&webkit2gtk::FaviconDatabase>, in_menu: bool) -> gtk::Button {
+        let button = gtk::Button::new();
+        button.set_relief(gtk::ReliefStyle::None);
+        button.style_context().add_class("favorite");
+        button.set_tooltip_text(Some(&format!("{}\n{}\nZum Ordnen ziehen", e.title, e.url)));
+        let bx = gtk::Box::new(Orientation::Horizontal, 6);
+        let icon = gtk::Image::from_icon_name(Some("starred-symbolic"), gtk::IconSize::Menu);
+        let label = gtk::Label::new(Some(if e.title.trim().is_empty() { &e.url } else { &e.title }));
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        label.set_max_width_chars(if in_menu { 40 } else { 18 });
+        if in_menu {
+            label.set_width_chars(24);
+        }
+        label.set_xalign(0.0);
+        bx.pack_start(&icon, false, false, 0);
+        bx.pack_start(&label, in_menu, in_menu, 0);
+        button.add(&bx);
+        if let Some(db) = favicons {
+            let icon = icon.clone();
+            let scale = self.window.scale_factor();
+            webkit2gtk::FaviconDatabaseExt::favicon(db, &e.url, None::<&gio::Cancellable>, move |result| {
+                if let Ok(surface) = result {
+                    if let Ok(image) = gtk::cairo::ImageSurface::try_from(surface) {
+                        if let Some(pixbuf) = gtk::gdk::pixbuf_get_from_surface(&image, 0, 0, image.width(), image.height()) {
+                            let size = 16 * scale;
+                            if let Some(scaled) = pixbuf.scale_simple(size, size, gtk::gdk_pixbuf::InterpType::Bilinear) {
+                                icon.set_from_pixbuf(Some(&scaled));
                             }
                         }
                     }
-                });
-            }
-            let w = self.weak();
-            let url = e.url.clone();
-            button.connect_button_release_event(move |_, event| {
-                with(&w, |w| match event.button() {
+                }
+            });
+        }
+        let w = self.weak();
+        let url = e.url.clone();
+        button.connect_button_release_event(move |_, event| {
+            with(&w, |w| {
+                if in_menu && event.button() != 3 {
+                    if let Some(p) = w.favorites_more.popover() {
+                        p.popdown();
+                    }
+                }
+                match event.button() {
                     1 if event.state().contains(gtk::gdk::ModifierType::CONTROL_MASK) => {
                         w.open_tab(&url, true);
                     }
@@ -1454,18 +1818,112 @@ impl BrowserWindow {
                     }
                     3 => w.favorite_menu(&url, event),
                     _ => {}
-                });
-                glib::Propagation::Stop
+                }
             });
-            self.favorites.pack_start(&button, false, false, 0);
+            glib::Propagation::Stop
+        });
+        let targets = [gtk::TargetEntry::new(FAVORITE_TARGET, gtk::TargetFlags::SAME_APP, 0)];
+        button.drag_source_set(gtk::gdk::ModifierType::BUTTON1_MASK, &targets, gtk::gdk::DragAction::MOVE);
+        button.drag_source_set_icon_name("starred-symbolic");
+        button.drag_dest_set(gtk::DestDefaults::ALL, &targets, gtk::gdk::DragAction::MOVE);
+        let url = e.url.clone();
+        button.connect_drag_data_get(move |_, _, data, _, _| {
+            data.set(&data.target(), 8, url.as_bytes());
+        });
+        let w = self.weak();
+        let url = e.url.clone();
+        button.connect_drag_data_received(move |button, _, x, y, data, _, _| {
+            let source = String::from_utf8_lossy(&data.data()).to_string();
+            if source == url {
+                return;
+            }
+            with(&w, |w| {
+                let after = if in_menu { y > button.allocated_height() / 2 } else { x > button.allocated_width() / 2 };
+                w.move_favorite(&source, &url, after);
+            });
+        });
+        button
+    }
+
+    fn move_favorite(self: &Rc<Self>, source: &str, target: &str, after: bool) {
+        let shelf = self.favorites_shelf.get();
+        let order: Vec<String> = self.app.storage.bookmarks(shelf).into_iter().rev().map(|e| e.url).filter(|u| u != source).collect();
+        let Some(index) = order.iter().position(|u| u == target) else { return };
+        let before = order.get(index + after as usize).map(String::as_str);
+        self.app.storage.move_bookmark(shelf, source, before);
+        self.app.bookmarks_changed();
+    }
+
+    fn schedule_favorites_fit(self: &Rc<Self>) {
+        if self.favorites_fit_pending.replace(true) {
+            return;
         }
-        self.favorites.show_all();
+        let w = self.weak();
+        glib::idle_add_local_once(move || {
+            with(&w, |w| {
+                w.favorites_fit_pending.set(false);
+                w.fit_favorites();
+            })
+        });
+    }
+
+    fn fit_favorites(self: &Rc<Self>) {
+        let available = self.favorites_scroll.allocated_width();
+        if available <= 1 {
+            return;
+        }
+        let buttons = self.favorite_buttons.borrow().clone();
+        let spacing = self.favorites.spacing();
+        let mut used = 0;
+        let mut visible = buttons.len();
+        for (i, (_, _, width)) in buttons.iter().enumerate() {
+            used += width + if i > 0 { spacing } else { 0 };
+            if used > available {
+                visible = i;
+                break;
+            }
+        }
+        let changed = buttons.iter().enumerate().any(|(i, (_, b, _))| b.is_visible() != (i < visible));
+        if !changed && self.favorites_more.is_visible() == (visible < buttons.len()) {
+            return;
+        }
+        for (i, (_, button, _)) in buttons.iter().enumerate() {
+            button.set_visible(i < visible);
+        }
+        self.rebuild_favorites_overflow(visible);
+    }
+
+    fn rebuild_favorites_overflow(self: &Rc<Self>, visible: usize) {
+        for child in self.favorites_overflow.children() {
+            self.favorites_overflow.remove(&child);
+        }
+        let shelf = self.favorites_shelf.get();
+        let bookmarks: Vec<_> = self.app.storage.bookmarks(shelf).into_iter().rev().collect();
+        let hidden: Vec<_> = if self.favorite_buttons.borrow().is_empty() { Vec::new() } else { bookmarks.into_iter().skip(visible).collect() };
+        self.favorites_more.set_visible(!hidden.is_empty());
+        let favicons = if shelf == Shelf::Tor { None } else { self.app.favicon_database() };
+        for e in &hidden {
+            let button = self.favorite_button(e, favicons.as_ref(), true);
+            self.favorites_overflow.pack_start(&button, false, false, 0);
+        }
+        self.favorites_overflow.show_all();
     }
 
     fn favorite_menu(self: &Rc<Self>, url: &str, event: &gtk::gdk::EventButton) {
         let menu = gtk::Menu::new();
-        let entries: [(&str, Box<dyn Fn(&Rc<BrowserWindow>, &str)>); 4] = [
+        let entries: [(&str, Box<dyn Fn(&Rc<BrowserWindow>, &str)>); 6] = [
             ("Umbenennen …", Box::new(|w, url| w.rename_favorite(w.favorites_shelf.get(), url))),
+            ("Ganz nach vorne", Box::new(|w, url| {
+                let first = w.app.storage.bookmarks(w.favorites_shelf.get()).into_iter().next_back().map(|e| e.url);
+                if let Some(first) = first.filter(|f| f != url) {
+                    w.app.storage.move_bookmark(w.favorites_shelf.get(), url, Some(&first));
+                    w.app.bookmarks_changed();
+                }
+            })),
+            ("Ganz nach hinten", Box::new(|w, url| {
+                w.app.storage.move_bookmark(w.favorites_shelf.get(), url, None);
+                w.app.bookmarks_changed();
+            })),
             ("In neuem Tab öffnen", Box::new(|w, url| {
                 w.open_tab(url, false);
             })),

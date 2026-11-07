@@ -37,11 +37,21 @@ pub struct WebKitEngine {
     managers: RefCell<Vec<glib::WeakRef<UserContentManager>>>,
     tor_port: u16,
     fingerprint_script: Option<webkit2gtk::UserScript>,
+    pub log_requests: std::cell::Cell<bool>,
+    pub intercepting: std::cell::Cell<bool>,
+    pub on_intercept: RefCell<Option<Rc<dyn Fn(Held)>>>,
+    intercept_bypass: Rc<RefCell<std::collections::HashSet<String>>>,
     tor_https_only: bool,
+    https_only: bool,
+    https_exceptions: Rc<[String]>,
+    block_local_net: bool,
     prewarm: bool,
     spare: RefCell<Option<(WebView, UserContentManager)>>,
     cookies: Option<Rc<crate::cookies::Keeper>>,
     pub permission_store: RefCell<Option<PermissionStore>>,
+    pub certificate_allowed: RefCell<Option<Rc<dyn Fn(&str, &str) -> bool>>>,
+    pub on_certificate_accepted: RefCell<Option<Rc<dyn Fn(&str, &str)>>>,
+    pending_certificates: RefCell<Vec<(String, String, String, String)>>,
     applied: RefCell<std::collections::HashMap<usize, (Vec<&'static str>, bool, u64)>>,
 }
 
@@ -153,6 +163,8 @@ impl WebKitEngine {
             for feature in ["Gamepads", "SpeechSynthesisAPI", "OffscreenCanvasInWorkers", "WebGL"] {
                 set_feature(&settings, feature, false);
             }
+        } else if mode != Mode::Tor && !config.webrtc {
+            settings.set_enable_webrtc(false);
         }
         if mode == Mode::Tor {
             settings.set_enable_encrypted_media(false);
@@ -203,11 +215,21 @@ impl WebKitEngine {
             managers: RefCell::new(Vec::new()),
             tor_port,
             fingerprint_script,
+            log_requests: std::cell::Cell::new(false),
+            intercepting: std::cell::Cell::new(false),
+            on_intercept: RefCell::new(None),
+            intercept_bypass: Rc::new(RefCell::new(std::collections::HashSet::new())),
             tor_https_only: config.tor_https_only,
+            https_only: if mode == Mode::Tor { config.tor_https_only } else { config.https_only },
+            https_exceptions: config.https_exceptions.clone().into(),
+            block_local_net: mode != Mode::Tor && config.local_network_protection,
             prewarm: config.prewarm && mode == Mode::Normal,
             spare: RefCell::new(None),
             cookies,
             permission_store: RefCell::new(None),
+            certificate_allowed: RefCell::new(None),
+            on_certificate_accepted: RefCell::new(None),
+            pending_certificates: RefCell::new(Vec::new()),
             applied: RefCell::new(std::collections::HashMap::new()),
         })
     }
@@ -270,6 +292,53 @@ impl WebKitEngine {
         if self.mode != Mode::Tor {
             apply_proxy(&self.data_manager, config);
         }
+    }
+
+    pub fn allow_certificate(&self, host: &str, pem: &str) {
+        if self.mode == Mode::Tor {
+            return;
+        }
+        if let Ok(cert) = gtk::gio::TlsCertificate::from_pem(pem) {
+            self.context.allow_tls_certificate_for_host(&cert, host);
+        }
+    }
+
+    fn certificate_error(&self, view: &WebView, uri: &str, cert: &gtk::gio::TlsCertificate, flags: gtk::gio::TlsCertificateFlags) {
+        let host = config::host_of(uri).unwrap_or_default();
+        let pem = cert.certificate_pem().map(|p| p.to_string()).unwrap_or_default();
+        let nonce = if self.mode == Mode::Tor || host.is_empty() || pem.is_empty() {
+            None
+        } else {
+            let mut bytes = [0u8; 16];
+            let _ = getrandom::fill(&mut bytes);
+            let nonce: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+            let mut pending = self.pending_certificates.borrow_mut();
+            pending.retain(|p| p.3 != uri);
+            pending.push((nonce.clone(), host, pem, uri.to_string()));
+            if pending.len() > 20 {
+                pending.remove(0);
+            }
+            Some(nonce)
+        };
+        show_certificate_error(view, uri, flags, nonce.as_deref());
+    }
+
+    fn accept_certificate(&self, nonce: &str) -> Option<String> {
+        let (_, host, pem, uri) = {
+            let mut pending = self.pending_certificates.borrow_mut();
+            let i = pending.iter().position(|p| p.0 == nonce)?;
+            pending.remove(i)
+        };
+        let callback = self.on_certificate_accepted.borrow().clone();
+        match callback {
+            Some(f) => f(&host, &pem),
+            None => self.allow_certificate(&host, &pem),
+        }
+        Some(uri)
+    }
+
+    fn certificate_allowed(&self, host: &str, pem: &str) -> bool {
+        self.mode != Mode::Tor && self.certificate_allowed.borrow().as_ref().is_some_and(|f| f(host, pem))
     }
 
     pub fn new_tor_circuits(&self) {
@@ -487,6 +556,16 @@ impl WebKitPage {
                     engine.update_blocking(&ucm, &uri);
                 }
             }
+            if event == LoadEvent::Committed {
+                if let (Some(engine), Some(uri), Some((cert, flags))) = (engine.upgrade(), view.uri(), view.tls_info()) {
+                    let host = config::host_of(&uri).unwrap_or_default();
+                    let pem = cert.certificate_pem().map(|p| p.to_string()).unwrap_or_default();
+                    if !flags.is_empty() && !engine.certificate_allowed(&host, &pem) {
+                        view.stop_loading();
+                        engine.certificate_error(view, &uri, &cert, flags);
+                    }
+                }
+            }
             s.emit(PageEvent::NavigationStateChanged);
             if event == LoadEvent::Finished {
                 s.emit(PageEvent::LoadFinished);
@@ -494,6 +573,26 @@ impl WebKitPage {
         });
         let s = sink.clone();
         v.connect_favicon_notify(move |_| s.emit(PageEvent::FaviconChanged));
+
+        let s = sink.clone();
+        let engine = Rc::downgrade(&self.engine);
+        v.connect_resource_load_started(move |_, _, request| {
+            let Some(engine) = engine.upgrade() else { return };
+            if !engine.log_requests.get() {
+                return;
+            }
+            use webkit2gtk::URIRequestExt;
+            let url = request.uri().map(|u| u.to_string()).unwrap_or_default();
+            if url.is_empty() || url.starts_with("data:") || url.starts_with("blob:") {
+                return;
+            }
+            let method = request.http_method().map(|m| m.to_string()).unwrap_or_else(|| "GET".into());
+            let mut headers = Vec::new();
+            if let Some(h) = request.http_headers() {
+                h.foreach(|k, v| headers.push((k.to_string(), v.to_string())));
+            }
+            s.emit(PageEvent::Request(crate::intercept::RequestRecord { method, url, headers }));
+        });
         let s = sink.clone();
         v.connect_is_playing_audio_notify(move |_| s.emit(PageEvent::AudioChanged));
         let s = sink.clone();
@@ -534,25 +633,68 @@ impl WebKitPage {
 
         let s = sink.clone();
         let tor = self.engine.mode == Mode::Tor;
-        let https_only = tor && self.engine.tor_https_only;
+        let https_only = self.engine.https_only;
+        let https_exceptions = self.engine.https_exceptions.clone();
+        let block_local_net = self.engine.block_local_net;
         let engine = Rc::downgrade(&self.engine);
         v.connect_decide_policy(move |view, decision, kind| {
+            let mut target = String::new();
             if matches!(kind, PolicyDecisionType::NavigationAction | PolicyDecisionType::NewWindowAction) {
-                let target = decision
+                target = decision
                     .downcast_ref::<NavigationPolicyDecision>()
                     .and_then(|n| n.navigation_action())
                     .and_then(|a| a.request())
                     .and_then(|r| r.uri())
                     .map(|u| u.to_string())
                     .unwrap_or_default();
+                if let Some(nonce) = target.strip_prefix("poezi-certificate:") {
+                    decision.ignore();
+                    if let Some(uri) = engine.upgrade().and_then(|e| e.accept_certificate(nonce)) {
+                        view.load_uri(&uri);
+                    }
+                    return true;
+                }
                 if !showing_blocked(&target) && engine.upgrade().is_some_and(|e| e.is_dangerous(&target)) {
                     decision.ignore();
                     show_blocked(view, &target, true);
                     s.emit(PageEvent::Blocked(target));
                     return true;
                 }
+                if block_local_net && !showing_blocked(&target) && is_local_navigation(view, &target) {
+                    decision.ignore();
+                    show_local_blocked(view, &target);
+                    return true;
+                }
+                if kind == PolicyDecisionType::NavigationAction && (target.starts_with("http://") || target.starts_with("https://")) {
+                    if let Some(engine) = engine.upgrade() {
+                        if engine.intercept_bypass.borrow_mut().remove(&target) {
+                            decision.use_();
+                            return true;
+                        }
+                        if engine.intercepting.get() {
+                            if let Some(callback) = engine.on_intercept.borrow().clone() {
+                                let method = decision
+                                    .downcast_ref::<NavigationPolicyDecision>()
+                                    .and_then(|n| n.navigation_action())
+                                    .and_then(|a| a.request())
+                                    .and_then(|r| webkit2gtk::URIRequestExt::http_method(&r))
+                                    .map(|m| m.to_string())
+                                    .unwrap_or_else(|| "GET".into());
+                                callback(Held {
+                                    decision: decision.clone(),
+                                    view: view.clone(),
+                                    method,
+                                    url: target.clone(),
+                                    bypass: engine.intercept_bypass.clone(),
+                                });
+                                return true;
+                            }
+                        }
+                    }
+                }
             }
-            decide_policy(&s, view, decision, kind, tor, https_only)
+            let eff_https = https_only && config::host_of(&target).map(|h| !host_in_list(&h, &https_exceptions)).unwrap_or(true);
+            decide_policy(&s, view, decision, kind, tor, eff_https)
         });
 
         v.connect_button_press_event(|view, event| match event.button() {
@@ -635,13 +777,11 @@ impl WebKitPage {
             true
         });
 
-        v.connect_load_failed_with_tls_errors(|view, uri, _cert, _flags| {
-            let host = config::host_of(uri).unwrap_or_default();
-            let html = crate::pages::error_page(
-                "Unsichere Verbindung",
-                &format!("Das Zertifikat von <b>{}</b> ist ungültig. PoeziBrowse hat die Seite deshalb nicht geladen.", crate::pages::escape(&host)),
-            );
-            view.load_alternate_html(&html, uri, None);
+        let engine = Rc::downgrade(&self.engine);
+        v.connect_load_failed_with_tls_errors(move |view, uri, cert, flags| {
+            if let Some(engine) = engine.upgrade() {
+                engine.certificate_error(view, uri, cert, flags);
+            }
             true
         });
     }
@@ -703,8 +843,130 @@ fn show_blocked(view: &WebView, uri: &str, dangerous: bool) {
     view.load_alternate_html(&html, uri, None);
 }
 
+fn certificate_problems(flags: gtk::gio::TlsCertificateFlags) -> String {
+    use gtk::gio::TlsCertificateFlags as F;
+    let reasons: Vec<&str> = [
+        (F::UNKNOWN_CA, "es wurde nicht von einer bekannten Stelle ausgestellt (z. B. selbst signiert)"),
+        (F::BAD_IDENTITY, "es gehört zu einer anderen Adresse"),
+        (F::EXPIRED, "es ist abgelaufen"),
+        (F::NOT_ACTIVATED, "es ist noch nicht gültig"),
+        (F::REVOKED, "es wurde zurückgezogen"),
+        (F::INSECURE, "es nutzt unsichere Verschlüsselung"),
+    ]
+    .into_iter()
+    .filter(|(f, _)| flags.contains(*f))
+    .map(|(_, t)| t)
+    .collect();
+    if reasons.is_empty() { "es konnte nicht geprüft werden".into() } else { reasons.join(", ") }
+}
+
+fn show_certificate_error(view: &WebView, uri: &str, flags: gtk::gio::TlsCertificateFlags, nonce: Option<&str>) {
+    let host = config::host_of(uri).unwrap_or_default();
+    let hint = match nonce {
+        None => "Im Tor-Modus lassen sich ungültige Zertifikate nicht zulassen.".to_string(),
+        Some(nonce) => format!(
+            "Nur zulassen, wenn du dem Gerät vertraust – z. B. dein Router, NAS oder Server im Heimnetz. Sonst könnte jemand die Verbindung mitlesen. Wieder blockieren geht unter Einstellungen → Zertifikate.</p>\
+             <p><a class=\"button danger\" href=\"poezi-certificate:{nonce}\">Trotzdem zulassen</a>"
+        ),
+    };
+    let html = crate::pages::error_page(
+        "Unsichere Verbindung",
+        &format!(
+            "Das Zertifikat von <b>{}</b> ist ungültig: {}. PoeziBrowse hat die Seite deshalb nicht geladen.</p><p>{hint}",
+            crate::pages::escape(&host),
+            certificate_problems(flags),
+        ),
+    );
+    view.load_alternate_html(&html, uri, None);
+}
+
 fn needs_https(uri: &str) -> bool {
     uri.get(..7).is_some_and(|p| p.eq_ignore_ascii_case("http://")) && !config::host_of(uri).is_some_and(|h| h.ends_with(".onion"))
+}
+
+fn host_in_list(host: &str, list: &[String]) -> bool {
+    let host = host.trim_start_matches("www.");
+    list.iter().any(|e| {
+        let e = e.trim_start_matches("www.");
+        host == e || host.ends_with(&format!(".{e}"))
+    })
+}
+
+fn parse_ip_part(s: &str) -> Option<u64> {
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        (!hex.is_empty()).then(|| u64::from_str_radix(hex, 16).ok()).flatten()
+    } else if s.len() > 1 && s.starts_with('0') {
+        u64::from_str_radix(&s[1..], 8).ok()
+    } else {
+        s.parse::<u64>().ok()
+    }
+}
+
+fn parse_ipv4(host: &str) -> Option<u32> {
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.is_empty() || parts.len() > 4 || parts.iter().any(|p| p.is_empty()) {
+        return None;
+    }
+    let vals: Vec<u64> = parts.iter().map(|p| parse_ip_part(p)).collect::<Option<_>>()?;
+    let ip: u64 = match vals.as_slice() {
+        [a] => *a,
+        [a, b] if *a <= 0xff && *b <= 0xff_ffff => (a << 24) | b,
+        [a, b, c] if *a <= 0xff && *b <= 0xff && *c <= 0xffff => (a << 24) | (b << 16) | c,
+        [a, b, c, d] if *a <= 0xff && *b <= 0xff && *c <= 0xff && *d <= 0xff => (a << 24) | (b << 16) | (c << 8) | d,
+        _ => return None,
+    };
+    (ip <= 0xffff_ffff).then_some(ip as u32)
+}
+
+fn is_private_v4(ip: u32) -> bool {
+    let first = ip >> 24;
+    first == 127
+        || first == 10
+        || first == 0
+        || (ip >> 16) == 0xC0A8
+        || (ip >> 20) == 0xAC1
+        || (ip >> 16) == 0xA9FE
+}
+
+pub fn is_local_host(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
+    if host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local") {
+        return true;
+    }
+    if host == "::1" || host == "::" || host.starts_with("fc") || host.starts_with("fd") || host.starts_with("fe80") {
+        return true;
+    }
+    if let Some(tail) = host.rsplit(':').next() {
+        if tail.contains('.') && parse_ipv4(tail).is_some_and(is_private_v4) {
+            return true;
+        }
+    }
+    parse_ipv4(&host).is_some_and(is_private_v4)
+}
+
+fn is_local_navigation(view: &WebView, target: &str) -> bool {
+    let Some(host) = config::host_of(target) else { return false };
+    if !is_local_host(&host) {
+        return false;
+    }
+    match view.uri().and_then(|u| config::host_of(&u)) {
+        Some(current) => !is_local_host(&current),
+        None => false,
+    }
+}
+
+fn show_local_blocked(view: &WebView, uri: &str) {
+    SHOWING_BLOCKED.with(|s| s.borrow_mut().push(uri.to_string()));
+    let host = config::host_of(uri).unwrap_or_default();
+    let html = crate::pages::error_page(
+        "Lokale Adresse blockiert",
+        &format!(
+            "Diese Seite wollte eine Adresse in deinem lokalen Netzwerk öffnen: <b>{}</b>. PoeziBrowse hat das verhindert – so kann keine fremde Webseite heimlich deinen Router oder Geräte im Heimnetz ansteuern.</p>\
+             <p>Wenn du die Adresse selbst erreichen willst, gib sie oben direkt in die Adressleiste ein. Den Schutz kannst du unter Einstellungen → Sicherheit abschalten.",
+            crate::pages::escape(&host),
+        ),
+    );
+    view.load_alternate_html(&html, uri, None);
 }
 
 fn upgrade_to_https(uri: &str) -> String {
@@ -758,6 +1020,34 @@ fn decide_policy(sink: &SinkSlot, view: &WebView, decision: &PolicyDecision, kin
             false
         }
         _ => false,
+    }
+}
+
+pub struct Held {
+    decision: PolicyDecision,
+    view: WebView,
+    pub method: String,
+    pub url: String,
+    bypass: Rc<RefCell<std::collections::HashSet<String>>>,
+}
+
+impl Held {
+    pub fn forward(self) {
+        self.decision.use_();
+    }
+
+    pub fn drop_request(self) {
+        self.decision.ignore();
+    }
+
+    pub fn forward_to(self, url: &str) {
+        if url == self.url || url.is_empty() {
+            self.decision.use_();
+        } else {
+            self.bypass.borrow_mut().insert(url.to_string());
+            self.decision.ignore();
+            self.view.load_uri(url);
+        }
     }
 }
 
@@ -1096,7 +1386,19 @@ impl Page for PageHandle {
 
 #[cfg(test)]
 mod tests {
-    use super::{needs_https, site_key, upgrade_to_https};
+    use super::{is_local_host, needs_https, site_key, upgrade_to_https};
+
+    #[test]
+    fn local_hosts() {
+        for h in ["localhost", "127.0.0.1", "10.1.2.3", "192.168.0.5", "172.16.0.1", "172.31.255.255", "169.254.1.1",
+                  "nas.local", "::1", "fd00::1", "2130706433", "0x7f.0.0.1", "0177.0.0.1", "127.1", "127.0.1",
+                  "::ffff:127.0.0.1", "[::1]"] {
+            assert!(is_local_host(h), "{h} should be local");
+        }
+        for h in ["example.com", "8.8.8.8", "172.32.0.1", "11.0.0.1", "github.com", "192.169.0.1", "1.2.3.4"] {
+            assert!(!is_local_host(h), "{h} should not be local");
+        }
+    }
 
     #[test]
     fn https_upgrade() {

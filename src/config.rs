@@ -93,9 +93,46 @@ pub struct Config {
     pub clear_history_on_exit: bool,
     pub remember_permissions: bool,
     pub permissions: Vec<SitePermission>,
+    pub allowed_certificates: Vec<AllowedCertificate>,
     pub config_version: u32,
     pub ignore_media_warning: bool,
     pub address_suggestions: bool,
+    pub download_ask: bool,
+    pub download_rules_enabled: bool,
+    pub download_rules: Vec<DownloadRule>,
+    pub animations: bool,
+    pub animation_speed: AnimationSpeed,
+    pub start_show_favorites: bool,
+    pub https_only: bool,
+    pub https_exceptions: Vec<String>,
+    pub javascript_jit: bool,
+    pub webrtc: bool,
+    pub local_network_protection: bool,
+    pub video_mode: VideoMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VideoMode {
+    Auto,
+    Compatible,
+    Software,
+    Gpu,
+}
+
+impl VideoMode {
+    pub fn id(self) -> &'static str {
+        match self {
+            VideoMode::Auto => "auto",
+            VideoMode::Compatible => "compatible",
+            VideoMode::Software => "software",
+            VideoMode::Gpu => "gpu",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<VideoMode> {
+        [VideoMode::Auto, VideoMode::Compatible, VideoMode::Software, VideoMode::Gpu].into_iter().find(|m| m.id() == id)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,6 +201,96 @@ impl PermissionKind {
             PermissionKind::Notifications => "notifications",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AnimationSpeed {
+    Fast,
+    Normal,
+    Slow,
+}
+
+impl AnimationSpeed {
+    pub fn millis(self) -> u32 {
+        match self {
+            AnimationSpeed::Fast => 120,
+            AnimationSpeed::Normal => 220,
+            AnimationSpeed::Slow => 400,
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            AnimationSpeed::Fast => "fast",
+            AnimationSpeed::Normal => "normal",
+            AnimationSpeed::Slow => "slow",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<AnimationSpeed> {
+        [AnimationSpeed::Fast, AnimationSpeed::Normal, AnimationSpeed::Slow].into_iter().find(|s| s.id() == id)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DownloadRule {
+    pub sites: String,
+    pub types: String,
+    pub folder: String,
+}
+
+impl DownloadRule {
+    pub fn is_empty(&self) -> bool {
+        self.sites.trim().is_empty() && self.types.trim().is_empty() && self.folder.trim().is_empty()
+    }
+
+    pub fn matches(&self, hosts: &[String], file_name: &str) -> bool {
+        let sites: Vec<String> = split_list(&self.sites).into_iter().map(|s| s.trim_start_matches("*.").trim_start_matches("www.").to_string()).collect();
+        let types: Vec<String> = split_list(&self.types).into_iter().map(|t| t.trim_start_matches("*.").trim_start_matches('.').to_string()).collect();
+        if (sites.is_empty() && types.is_empty()) || self.folder.trim().is_empty() {
+            return false;
+        }
+        let site_ok = sites.is_empty() || hosts.iter().any(|h| sites.iter().any(|s| h == s || h.ends_with(&format!(".{s}"))));
+        let ext = file_name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+        let type_ok = types.is_empty() || types.iter().any(|t| *t == ext);
+        site_ok && type_ok
+    }
+
+    pub fn folder_path(&self) -> PathBuf {
+        expand_home(self.folder.trim())
+    }
+}
+
+fn split_list(text: &str) -> Vec<String> {
+    text.split([',', ' ', ';']).map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty()).collect()
+}
+
+pub fn expand_home(path: &str) -> PathBuf {
+    match path.strip_prefix("~/").or(if path == "~" { Some("") } else { None }) {
+        Some(rest) => dirs::home_dir().unwrap_or_default().join(rest),
+        None => PathBuf::from(path),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowedCertificate {
+    pub host: String,
+    pub pem: String,
+}
+
+impl AllowedCertificate {
+    pub fn fingerprint(&self) -> String {
+        certificate_fingerprint(&self.pem)
+    }
+}
+
+pub fn certificate_fingerprint(pem: &str) -> String {
+    use sha2::Digest;
+    let body: String = pem.lines().filter(|l| !l.starts_with("-----")).map(str::trim).collect();
+    let der = gtk::glib::base64_decode(&body);
+    sha2::Sha256::digest(&der).iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(":")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -329,9 +456,22 @@ impl Default for Config {
             clear_history_on_exit: false,
             remember_permissions: true,
             permissions: Vec::new(),
+            allowed_certificates: Vec::new(),
             config_version: 0,
             ignore_media_warning: false,
             address_suggestions: false,
+            download_ask: true,
+            download_rules_enabled: false,
+            download_rules: Vec::new(),
+            animations: true,
+            animation_speed: AnimationSpeed::Normal,
+            start_show_favorites: true,
+            https_only: false,
+            https_exceptions: Vec::new(),
+            javascript_jit: true,
+            webrtc: true,
+            local_network_protection: true,
+            video_mode: VideoMode::Auto,
         }
     }
 }
@@ -381,6 +521,24 @@ impl Config {
         self.permissions.sort_by(|a, b| a.host.cmp(&b.host).then(a.kind.id().cmp(b.kind.id())));
     }
 
+    pub fn download_folder_for(&self, hosts: &[String], file_name: &str) -> Option<PathBuf> {
+        if !self.download_rules_enabled {
+            return None;
+        }
+        self.download_rules.iter().find(|r| r.matches(hosts, file_name)).map(|r| r.folder_path())
+    }
+
+    pub fn certificate_allowed(&self, host: &str, pem: &str) -> bool {
+        self.allowed_certificates.iter().any(|c| c.host == host && c.pem == pem)
+    }
+
+    pub fn allow_certificate(&mut self, host: &str, pem: &str) {
+        if !self.certificate_allowed(host, pem) {
+            self.allowed_certificates.push(AllowedCertificate { host: host.to_string(), pem: pem.to_string() });
+            self.allowed_certificates.sort_by(|a, b| a.host.cmp(&b.host));
+        }
+    }
+
     pub fn save(&self) {
         let dir = config_dir();
         match toml::to_string_pretty(self) {
@@ -404,7 +562,7 @@ impl Config {
 
     pub fn download_dir(&self) -> PathBuf {
         if !self.download_dir.is_empty() {
-            return PathBuf::from(&self.download_dir);
+            return expand_home(&self.download_dir);
         }
         dirs::download_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_default())
     }
@@ -532,6 +690,20 @@ pub fn host_of(url: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn download_rules() {
+        let rule = super::DownloadRule { sites: "mp3.cc".into(), types: "mp3, .flac".into(), folder: "~/Musik".into() };
+        let hosts = |h: &[&str]| h.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(rule.matches(&hosts(&["cdn.x.net", "www.mp3.cc"]), "Song.MP3"));
+        assert!(rule.matches(&hosts(&["mp3.cc"]), "a.flac"));
+        assert!(!rule.matches(&hosts(&["mp3.cc"]), "a.zip"));
+        assert!(!rule.matches(&hosts(&["evilmp3.cc"]), "a.mp3"));
+        let any_site = super::DownloadRule { sites: "".into(), types: "pdf".into(), folder: "/tmp/docs".into() };
+        assert!(any_site.matches(&hosts(&["example.org"]), "x.pdf"));
+        assert!(!super::DownloadRule { sites: "".into(), types: "".into(), folder: "/x".into() }.matches(&hosts(&["a"]), "b"));
+        assert!(rule.folder_path().ends_with("Musik") && rule.folder_path().is_absolute());
+    }
+
     use super::*;
 
     #[test]

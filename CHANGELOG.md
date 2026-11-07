@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.8.0 – security tools, certificates, better settings / Sicherheits-Werkzeuge, Zertifikate, bessere Einstellungen
+
+**English**
+
+- **Invalid certificates can now be allowed:** the warning page has an "Allow anyway" button for your own devices (router, NAS …). Allowed certificates are listed under Settings → Certificates, where you can block them again.
+- **PoeziIntercept** (sidebar): a built-in request tool for authorized security testing, in an adjustable split next to the page – a request log, a repeater (edit method/URL/headers/body, resend via libsoup, raw response + missing-security-header check), an intruder (fuzz a marked `§` position with built-in OWASP payload lists: XSS, SQLi, path traversal, command injection, SSTI) and an intercept mode (hold page loads/form submits, then forward/edit/drop; closing wipes the captured log).
+- **Terminal** (sidebar): a real terminal in the same adjustable split, using the system vte, with Ctrl+V paste and Ctrl+Shift+C copy.
+- **Split view:** drag a tab onto the middle of another to show both side by side in an adjustable split; end it with the "Teilen beenden" button, by dragging a tab out, closing one, or switching tab.
+- **Favourites** can be reordered by dragging, in the bar and in a new overflow dropdown; what doesn't fit moves into the dropdown.
+- **Video mode** setting (Auto/Compatible/Software/GPU) against green or flickering video on NVIDIA; more animations that follow the browser's own "Animations" setting.
+- **Downloads:** your system's save dialog now appears, plus optional folder rules (e.g. mp3 files from a site straight into a chosen folder).
+- **Settings** got a search box and chapter-navigation buttons. New security options (their own chapter, not a separate page): HTTPS-only with exceptions, WebRTC off, local-network protection (SSRF-hardened against decimal/octal/short IP forms), JavaScript JIT off.
+- Hide favourites on the new-tab page; animations can be tuned or turned off.
+- **Efficiency:** request logging only runs while PoeziIntercept is open; the title-bar animation pauses when the window is unfocused; the RAM readout polls lighter and pauses in the background.
+- The package now depends on vte (terminal).
+
+**Deutsch**
+
+- **Ungültige Zertifikate lassen sich jetzt zulassen:** Die Warnseite hat einen Button „Trotzdem zulassen“ für eigene Geräte (Router, NAS …). Zugelassene Zertifikate stehen unter Einstellungen → Zertifikate und lassen sich dort wieder blockieren.
+- **PoeziIntercept** (Seitenleiste): ein eingebautes Request-Werkzeug für autorisierte Sicherheitstests, in einem anpassbaren Split neben der Seite – ein Request-Verlauf, ein Repeater (Methode/URL/Header/Body bearbeiten, über libsoup senden, rohe Antwort mit Prüfung fehlender Sicherheits-Header) und ein Intruder (fuzzt eine mit `§` markierte Stelle über eingebaute OWASP-Listen: XSS, SQLi, Path Traversal, Command Injection, SSTI).
+- **Terminal** (Seitenleiste): ein echtes Terminal im selben anpassbaren Split, über das System-vte, mit Strg+V einfügen und Strg+Umschalt+C kopieren. Der Intercept-Modus hält Anfragen an und lässt dich weiterleiten/bearbeiten/verwerfen.
+- **Geteilte Ansicht:** einen Tab auf die Mitte eines anderen ziehen → beide nebeneinander, Trennlinie verschiebbar; beenden per „Teilen beenden", Tab herausziehen, einen schließen oder anderen Tab anklicken.
+- **Favoriten** lassen sich per Ziehen sortieren, in der Leiste und in einem neuen Dropdown; was nicht in die Leiste passt, wandert ins Dropdown.
+- **Video-Darstellung** (Automatisch/Kompatibel/Software/GPU) gegen grüne oder flackernde Videos auf NVIDIA; mehr Animationen, die der browser-eigenen „Animationen"-Einstellung folgen.
+- **Downloads:** Der Speichern-Dialog des Systems erscheint jetzt, dazu optionale Ordner-Regeln (z. B. MP3s von einer Seite direkt in einen gewählten Ordner).
+- **Einstellungen** haben eine Suche und Kapitel-Buttons bekommen. Neue Sicherheits-Optionen (eigenes Kapitel, keine eigene Seite): Nur HTTPS mit Ausnahmen, WebRTC aus, Schutz des lokalen Netzwerks, JavaScript-JIT aus.
+- Favoriten auf der Startseite ausblenden; Animationen einstellbar oder abschaltbar.
+- **Effizienz:** Request-Mitschnitt läuft nur bei offenem PoeziIntercept; die RAM-Anzeige fragt alle 5 s statt 3 s ab und scannt nicht mehr jedes Mal ganz /proc (die Prozessliste wird zwischengespeichert, voller Scan nur noch etwa einmal pro Minute).
+- Das Paket hängt jetzt von vte (Terminal) ab.
+
 ## v0.7.1 – no more freezes / keine Hänger mehr
 
 **English**

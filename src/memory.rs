@@ -1,17 +1,23 @@
 use std::collections::HashMap;
 use std::fs;
 
-pub fn total_usage() -> u64 {
+pub fn descendant_pids() -> Vec<u32> {
     let me = std::process::id();
     let parents = parent_map();
+    parents
+        .keys()
+        .copied()
+        .filter(|&pid| pid == me || is_descendant(pid, me, &parents))
+        .collect()
+}
+
+pub fn usage_of(pids: &[u32]) -> u64 {
     let mut private = 0;
     let mut shared = 0;
-    for (&pid, _) in parents.iter() {
-        if pid == me || is_descendant(pid, me, &parents) {
-            if let Some((anon, file)) = rss_of(pid) {
-                private += anon;
-                shared = shared.max(file);
-            }
+    for &pid in pids {
+        if let Some((anon, file)) = rss_of(pid) {
+            private += anon;
+            shared = shared.max(file);
         }
     }
     private + shared
@@ -101,6 +107,8 @@ pub fn format_bytes(bytes: u64) -> String {
 mod tests {
     #[test]
     fn measures_self() {
-        assert!(super::total_usage() > 0);
+        let pids = super::descendant_pids();
+        assert!(pids.contains(&std::process::id()));
+        assert!(super::usage_of(&pids) > 0);
     }
 }

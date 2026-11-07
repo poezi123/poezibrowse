@@ -74,6 +74,10 @@ impl Storage {
              CREATE TABLE IF NOT EXISTS tor_bookmarks (
                  url TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', added INTEGER NOT NULL);",
         );
+        for table in ["bookmarks", "tor_bookmarks"] {
+            let _ = db.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN position INTEGER"));
+            let _ = db.execute_batch(&format!("UPDATE {table} SET position = added WHERE position IS NULL"));
+        }
         Storage { db }
     }
 
@@ -127,7 +131,7 @@ impl Storage {
     }
 
     pub fn bookmarks(&self, shelf: Shelf) -> Vec<Entry> {
-        self.query(&format!("SELECT url, title, added FROM {} ORDER BY added DESC", shelf.table()), [])
+        self.query(&format!("SELECT url, title, added FROM {} ORDER BY position DESC, added DESC", shelf.table()), [])
     }
 
     pub fn is_bookmarked(&self, shelf: Shelf, url: &str) -> bool {
@@ -139,7 +143,8 @@ impl Storage {
     pub fn add_bookmark(&self, shelf: Shelf, url: &str, title: &str) {
         let _ = self.db.execute(
             &format!(
-                "INSERT INTO {} (url, title, added) VALUES (?1, ?2, ?3) ON CONFLICT(url) DO UPDATE SET title = ?2",
+                "INSERT INTO {0} (url, title, added, position) VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(position), 0) + 1 FROM {0}))
+                 ON CONFLICT(url) DO UPDATE SET title = ?2",
                 shelf.table()
             ),
             params![url, title, now()],
@@ -148,6 +153,19 @@ impl Storage {
 
     pub fn rename_bookmark(&self, shelf: Shelf, url: &str, title: &str) {
         let _ = self.db.execute(&format!("UPDATE {} SET title = ?2 WHERE url = ?1", shelf.table()), params![url, title]);
+    }
+
+    pub fn move_bookmark(&self, shelf: Shelf, url: &str, before: Option<&str>) {
+        let mut order: Vec<String> = self.bookmarks(shelf).into_iter().rev().map(|e| e.url).collect();
+        let Some(from) = order.iter().position(|u| u == url) else { return };
+        let moved = order.remove(from);
+        let to = before.and_then(|b| order.iter().position(|u| u == b)).unwrap_or(order.len());
+        order.insert(to, moved);
+        let Ok(tx) = self.db.unchecked_transaction() else { return };
+        for (i, u) in order.iter().enumerate() {
+            let _ = tx.execute(&format!("UPDATE {} SET position = ?2 WHERE url = ?1", shelf.table()), params![u, i as i64 + 1]);
+        }
+        let _ = tx.commit();
     }
 
     pub fn remove_bookmark(&self, shelf: Shelf, url: &str) {
@@ -186,6 +204,24 @@ mod tests {
         assert!(s.suggest("100%", 5, Shelf::Normal).is_empty());
         s.clear_history();
         assert!(s.history("", 10).is_empty());
+    }
+
+    #[test]
+    fn bookmark_order() {
+        let s = storage();
+        for u in ["a", "b", "c", "d"] {
+            s.add_bookmark(Shelf::Normal, u, u);
+        }
+        let bar = |s: &Storage| s.bookmarks(Shelf::Normal).into_iter().rev().map(|e| e.url).collect::<Vec<_>>().join("");
+        assert_eq!(bar(&s), "abcd");
+        s.move_bookmark(Shelf::Normal, "d", Some("a"));
+        assert_eq!(bar(&s), "dabc");
+        s.move_bookmark(Shelf::Normal, "d", None);
+        assert_eq!(bar(&s), "abcd");
+        s.move_bookmark(Shelf::Normal, "a", Some("c"));
+        assert_eq!(bar(&s), "bacd");
+        s.add_bookmark(Shelf::Normal, "e", "e");
+        assert_eq!(bar(&s), "bacde");
     }
 
     #[test]

@@ -4,6 +4,7 @@ mod config;
 mod cookies;
 mod countries;
 mod engine;
+mod intercept;
 mod memory;
 mod pages;
 mod passwords;
@@ -12,6 +13,7 @@ mod sidebar;
 mod storage;
 mod system;
 mod tab;
+mod terminal;
 mod titlebar;
 mod tor;
 mod window;
@@ -21,16 +23,48 @@ use gtk::gio;
 use gtk::prelude::*;
 
 fn main() -> gtk::glib::ExitCode {
-    if system::nvidia() {
-        if std::env::var_os("__NV_DISABLE_EXPLICIT_SYNC").is_none() {
-            unsafe { std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1") };
+    let startup_config = config::Config::load();
+    let nvidia = system::nvidia();
+    if nvidia && std::env::var_os("__NV_DISABLE_EXPLICIT_SYNC").is_none() {
+        unsafe { std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1") };
+    }
+    if nvidia && system::wayland_session() && !system::webkit_at_least(2, 54) && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+    }
+    {
+        let set = |k: &str, v: &str| {
+            if std::env::var_os(k).is_none() {
+                unsafe { std::env::set_var(k, v) };
+            }
+        };
+        let safe_sink = || {
+            set("WEBKIT_GST_DMABUF_SINK_DISABLED", "1");
+            set("WEBKIT_GST_DISABLE_GL_SINK", "1");
+        };
+        let software_decoders = || {
+            set(
+                "GST_PLUGIN_FEATURE_RANK",
+                "nvh264dec:0,nvh264sldec:0,nvh265dec:0,nvh265sldec:0,nvvp8dec:0,nvvp9dec:0,nvvp9sldec:0,nvav1dec:0,\
+                 vah264dec:0,vah265dec:0,vavp8dec:0,vavp9dec:0,vaav1dec:0,\
+                 vaapih264dec:0,vaapih265dec:0,vaapivp8dec:0,vaapivp9dec:0,vaapiav1dec:0",
+            );
+        };
+        match startup_config.video_mode {
+            config::VideoMode::Auto => {
+                if nvidia {
+                    safe_sink();
+                }
+            }
+            config::VideoMode::Compatible => safe_sink(),
+            config::VideoMode::Software => {
+                safe_sink();
+                software_decoders();
+            }
+            config::VideoMode::Gpu => {}
         }
-        if std::env::var_os("WEBKIT_GST_DMABUF_SINK_DISABLED").is_none() {
-            unsafe { std::env::set_var("WEBKIT_GST_DMABUF_SINK_DISABLED", "1") };
-        }
-        if system::wayland_session() && !system::webkit_at_least(2, 54) && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-            unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
-        }
+    }
+    if !startup_config.javascript_jit && std::env::var_os("JSC_useJIT").is_none() {
+        unsafe { std::env::set_var("JSC_useJIT", "false") };
     }
     if std::env::args().nth(1).as_deref() == Some("--diagnose") {
         print!("{}", system::diagnose());

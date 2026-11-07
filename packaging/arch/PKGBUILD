@@ -1,13 +1,13 @@
 
 pkgname=poezibrowse
-pkgver=0.7.1
+pkgver=0.8.0
 pkgrel=1
 pkgdesc='Schlanker Webbrowser für Linux, geschrieben in Rust'
 arch=('x86_64')
 url='https://github.com/poezi123/poezibrowse'
 license=('GPL-3.0-or-later')
 depends=('webkit2gtk-4.1' 'gtk3' 'glib2' 'glib-networking' 'cairo' 'pango' 'gdk-pixbuf2' 'sqlite' 'hicolor-icon-theme'
-         'gst-plugins-base' 'gst-plugins-good' 'gst-libav' 'gst-plugin-dav1d')
+         'gst-plugins-base' 'gst-plugins-good' 'gst-libav' 'gst-plugin-dav1d' 'vte3')
 makedepends=('cargo' 'pkgconf')
 optdepends=('xdg-dbus-proxy: Sandbox für Webseiten-Prozesse'
             'tor: Tor-Modus'

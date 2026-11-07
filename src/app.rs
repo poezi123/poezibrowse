@@ -33,6 +33,7 @@ pub struct App {
     pub storage: Storage,
     pub token: String,
     pub block_exceptions: RefCell<Vec<String>>,
+    pub session_certificates: RefCell<Vec<(String, String)>>,
     windows: RefCell<Vec<Rc<BrowserWindow>>>,
     next_tab_id: Cell<u64>,
     session_dirty: Cell<bool>,
@@ -59,6 +60,7 @@ impl App {
             storage: Storage::open(),
             token: random_token(),
             block_exceptions: RefCell::new(Vec::new()),
+            session_certificates: RefCell::new(Vec::new()),
             windows: RefCell::new(Vec::new()),
             next_tab_id: Cell::new(1),
             session_dirty: Cell::new(false),
@@ -79,9 +81,11 @@ impl App {
                 Theme::Light => false,
                 Theme::Dark => true,
             });
+            settings.set_gtk_enable_animations(config.animations);
         }
         for window in self.windows.borrow().iter() {
             window.titlebar.apply(&config);
+            window.apply_animation_speed(&config);
         }
     }
 
@@ -315,6 +319,22 @@ impl App {
                 enabled_for: Rc::new(move |host| me.upgrade().is_some_and(|app| app.ads_blocked_for(host))),
                 filters_for: Rc::new(move |host| me2.upgrade().map(|app| app.filters_for(host)).unwrap_or_default()),
             });
+        }
+        let cert_app = self.me.clone();
+        *engine.certificate_allowed.borrow_mut() = Some(Rc::new(move |host, pem| {
+            cert_app.upgrade().is_some_and(|app| {
+                app.config.borrow().certificate_allowed(host, pem)
+                    || (mode == Mode::Private && app.session_certificates.borrow().iter().any(|(h, p)| h == host && p == pem))
+            })
+        }));
+        let accept_app = self.me.clone();
+        *engine.on_certificate_accepted.borrow_mut() = Some(Rc::new(move |host, pem| {
+            if let Some(app) = accept_app.upgrade() {
+                app.allow_certificate(mode, host, pem);
+            }
+        }));
+        for cert in self.config.borrow().allowed_certificates.iter() {
+            engine.allow_certificate(&cert.host, &cert.pem);
         }
         let (get_app, set_app) = (self.me.clone(), self.me.clone());
         *engine.permission_store.borrow_mut() = Some(crate::engine::webkit::PermissionStore {
@@ -640,6 +660,24 @@ impl App {
         ids
     }
 
+    pub fn allow_certificate(&self, mode: Mode, host: &str, pem: &str) {
+        match mode {
+            Mode::Tor => return,
+            Mode::Normal => {
+                let mut c = self.config.borrow_mut();
+                c.allow_certificate(host, pem);
+                c.save();
+            }
+            Mode::Private => self.session_certificates.borrow_mut().push((host.to_string(), pem.to_string())),
+        }
+        let modes: &[Mode] = if mode == Mode::Normal { &[Mode::Normal, Mode::Private] } else { &[Mode::Private] };
+        for m in modes {
+            if let Some(engine) = self.engine_slot(*m).borrow().as_ref() {
+                engine.allow_certificate(host, pem);
+            }
+        }
+    }
+
     pub fn allow_blocked_host(&self, host: &str) {
         if !self.exempt(host) {
             self.block_exceptions.borrow_mut().push(host.to_string());
@@ -687,11 +725,36 @@ impl App {
         });
 
         let me = self.me.clone();
+        let ticks = std::rc::Rc::new(Cell::new(0u32));
+        let pids: std::rc::Rc<RefCell<Vec<u32>>> = std::rc::Rc::default();
         let tick = move || {
             let Some(app) = me.upgrade() else { return glib::ControlFlow::Break };
             let me = app.me.clone();
+            let n = ticks.get();
+            ticks.set(n.wrapping_add(1));
+            let rescan = n % 12 == 0 || pids.borrow().is_empty();
+            let active = app.windows.borrow().iter().any(|w| w.window_is_active());
+            if !active && !rescan {
+                return glib::ControlFlow::Continue;
+            }
+            let cached = pids.borrow().clone();
+            let pids = pids.clone();
             glib::MainContext::default().spawn_local(async move {
-                let Ok(bytes) = gio::spawn_blocking(memory::total_usage).await else { return };
+                let Ok((bytes, fresh)) = gio::spawn_blocking(move || {
+                    if rescan {
+                        let list = memory::descendant_pids();
+                        (memory::usage_of(&list), Some(list))
+                    } else {
+                        (memory::usage_of(&cached), None)
+                    }
+                })
+                .await
+                else {
+                    return;
+                };
+                if let Some(list) = fresh {
+                    *pids.borrow_mut() = list;
+                }
                 if let Some(app) = me.upgrade() {
                     app.enforce_ram_budget(bytes);
                     let text = format!("RAM {}", memory::format_bytes(bytes));
@@ -703,7 +766,7 @@ impl App {
             glib::ControlFlow::Continue
         };
         tick();
-        glib::timeout_add_local(Duration::from_secs(3), tick);
+        glib::timeout_add_local(Duration::from_secs(5), tick);
     }
 
     fn download_started(self: &Rc<Self>, download: &Download) {
@@ -742,11 +805,59 @@ impl App {
         let target: Rc<RefCell<Option<std::path::PathBuf>>> = Rc::new(RefCell::new(None));
         let t = target.clone();
         let n = name.clone();
+        let me = self.me.clone();
+        let parent = window.window.clone();
+        let r = row.clone();
         download.connect_decide_destination(move |download, suggested| {
-            let path = unique_path(&dir, suggested);
-            n.set_text(&path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default());
-            download.set_destination(&glib::filename_to_uri(&path, None).map(|u| u.to_string()).unwrap_or_default());
-            *t.borrow_mut() = Some(path);
+            let Some(app) = me.upgrade() else { return false };
+            let mut hosts = Vec::new();
+            let page_uri = download.web_view().and_then(|v| webkit2gtk::WebViewExt::uri(&v)).map(|u| u.to_string());
+            let file_uri = download.request().and_then(|r| webkit2gtk::URIRequestExt::uri(&r)).map(|u| u.to_string());
+            for uri in [page_uri, file_uri].into_iter().flatten() {
+                if let Some(host) = crate::config::host_of(&uri) {
+                    hosts.push(host.trim_start_matches("www.").to_string());
+                }
+            }
+            let file_name = std::path::Path::new(suggested).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+            let (ask, rule_dir) = {
+                let c = app.config.borrow();
+                (c.download_ask, c.download_folder_for(&hosts, &file_name))
+            };
+            let folder = rule_dir.clone().unwrap_or_else(|| dir.clone());
+            let accept = {
+                let (t, n) = (t.clone(), n.clone());
+                move |download: &Download, path: std::path::PathBuf| {
+                    n.set_text(&path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default());
+                    download.set_allow_overwrite(true);
+                    download.set_destination(&glib::filename_to_uri(&path, None).map(|u| u.to_string()).unwrap_or_default());
+                    *t.borrow_mut() = Some(path);
+                }
+            };
+            if !ask {
+                accept(download, unique_path(&folder, suggested));
+                return true;
+            }
+            let _ = std::fs::create_dir_all(&folder);
+            let chooser = gtk::FileChooserNative::new(Some("Download speichern"), Some(&parent), gtk::FileChooserAction::Save, Some("Speichern"), Some("Abbrechen"));
+            chooser.set_do_overwrite_confirmation(true);
+            chooser.set_modal(true);
+            let _ = chooser.set_current_folder(&folder);
+            chooser.set_current_name(&unique_path(&folder, suggested).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or(file_name));
+            let d = download.clone();
+            let r = r.clone();
+            chooser.connect_response(move |chooser, response| {
+                match (response, chooser.filename()) {
+                    (gtk::ResponseType::Accept, Some(path)) => accept(&d, path),
+                    _ => {
+                        d.cancel();
+                        if let Some(parent) = r.parent().and_then(|p| p.downcast::<gtk::Container>().ok()) {
+                            parent.remove(&r);
+                        }
+                    }
+                }
+                chooser.destroy();
+            });
+            chooser.show();
             true
         });
         let p = progress.clone();
@@ -799,7 +910,7 @@ fn copy_text(copy: bool, text: &str) {
     }
 }
 
-fn random_token() -> String {
+pub fn random_token() -> String {
     use std::io::Read;
     let mut bytes = [0u8; 32];
     std::fs::File::open("/dev/urandom")
@@ -871,24 +982,38 @@ fn load_css() {
         .favorites-bar button.favorite:hover { background-color: alpha(#ffffff, 0.08); color: #ffffff; }
         .favorites-bar button.favorite image { color: #f2c94c; }
         .favorites-hint { color: #6f7889; font-size: 0.9em; }
+        popover.favorites-popover { background-color: #121722; border: 1px solid #1f2633; }
+        .favorites-overflow { padding: 4px; }
+        .favorites-overflow button.favorite { color: #cfd5df; background: none; border: none; box-shadow: none; border-radius: 8px; padding: 5px 10px; }
+        .favorites-overflow button.favorite:hover { background-color: alpha(#ffffff, 0.08); color: #ffffff; }
+        .favorites-overflow button.favorite image { color: #f2c94c; }
 
         .tab-strip { background-color: #0b0e14; box-shadow: inset 0 -1px #1b2130; padding: 5px 8px 0 8px; }
         .tab-chip { background: none; color: #8f98a8; border-radius: 10px 10px 0 0; padding: 5px 8px 5px 10px; margin: 0 1px;
-                    transition: background-color 150ms ease, color 150ms ease; }
+                    transition: background-color 180ms ease, color 180ms ease, box-shadow 180ms ease; }
         .tab-chip:hover { background-color: alpha(#ffffff, 0.05); color: #dfe4ec; }
         .tab-chip.active { background-color: #161b26; color: #ffffff; box-shadow: inset 0 2px #13b5b1; }
+        .tab-chip.split { box-shadow: inset 0 2px #7c42de; }
+        .tab-chip.split.active { box-shadow: inset 0 2px #7c42de; background-color: #1a1430; }
+        paned.poezi-split > separator { background-color: #1b2130; min-width: 3px; }
         .tab-chip button { color: inherit; background: none; border: none; box-shadow: none; padding: 0;
-                           min-height: 18px; min-width: 18px; border-radius: 999px; }
+                           min-height: 18px; min-width: 18px; border-radius: 999px; transition: background-color 150ms ease; }
         .tab-chip button:hover { background-color: alpha(#ffffff, 0.14); }
         .tab-strip button.new-tab { color: #c7cdd8; background: none; border: none; box-shadow: none; border-radius: 9px;
-                                    min-height: 26px; min-width: 26px; padding: 2px; margin: 0 0 4px 4px; }
+                                    min-height: 26px; min-width: 26px; padding: 2px; margin: 0 0 4px 4px;
+                                    transition: background-color 150ms ease, color 150ms ease; }
         .tab-strip button.new-tab:hover { background-color: alpha(#13b5b1, 0.22); color: #ffffff; }
         .ram-label { color: #9aa3b2; font-size: 0.9em; margin: 0 4px 4px 6px; }
+        button.split-exit { color: #c9b6f2; background-color: alpha(#7c42de, 0.18); border: none; box-shadow: none;
+                            border-radius: 9px; padding: 2px 10px; margin: 0 2px 4px 2px; font-size: 0.9em;
+                            transition: background-color 150ms ease, color 150ms ease; }
+        button.split-exit:hover { background-color: alpha(#7c42de, 0.34); color: #ffffff; }
 
         .sidebar { background-color: #0b0e14; border-right: 1px solid #161c27; padding: 8px 5px; }
         .sidebar separator { background-color: #1b2130; margin: 4px 6px; min-height: 1px; }
         button.side-button { color: #aeb6c4; background: none; border: none; box-shadow: none; border-radius: 10px;
-                             min-height: 34px; min-width: 34px; padding: 0; transition: background-color 120ms ease; }
+                             min-height: 34px; min-width: 34px; padding: 0;
+                             transition: background-color 160ms ease, color 160ms ease, box-shadow 200ms ease; }
         button.side-button:hover { background-color: alpha(#ffffff, 0.08); color: #ffffff; }
         button.side-button:checked { background-color: alpha(#13b5b1, 0.22); color: #ffffff; box-shadow: inset 2px 0 #13b5b1; }
         .side-panel { background-color: #0f131b; border-right: 1px solid #161c27; padding: 12px 10px; color: #dfe4ec; }
@@ -899,6 +1024,7 @@ fn load_css() {
         .side-panel row label { color: #e3e7ee; }
         .side-panel row label.dim-label { color: #8f98a8; }
         .side-panel label.dim-label { color: #8f98a8; }
+        .side-panel row { transition: background-color 150ms ease; }
         .side-panel row:hover { background-color: alpha(#ffffff, 0.05); }
         .panel-row { padding: 6px 6px 6px 10px; }
         .panel-row .small { font-size: 0.85em; }
@@ -942,6 +1068,13 @@ fn load_css() {
         revealer > .findbar { border-top: 1px solid #1b2130; }
         .findbar entry { border-radius: 999px 0 0 999px; }
         .findbar button { color: #c7cdd8; }
+        .dock { background-color: #0d1118; border-left: 1px solid #1b2130; min-width: 320px; padding: 8px; }
+        .dock .tool-title { font-weight: 700; color: #e8ecf2; padding: 2px 2px 4px; }
+        .dock .tool-caption { color: #8f98a8; font-size: 0.85em; padding: 0 2px; }
+        .dock .tool-field { border: 1px solid #1f2633; border-radius: 8px; background-color: #0b0e14; }
+        .dock textview { background-color: #0b0e14; color: #dfe4ec; }
+        .dock textview text { background-color: #0b0e14; color: #dfe4ec; }
+        .dock .intercept-log row:selected { background-color: #16324a; }
         "#,
     );
     if let Some(screen) = gtk::gdk::Screen::default() {
