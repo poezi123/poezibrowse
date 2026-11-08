@@ -153,10 +153,10 @@ impl App {
                 let window = window.clone();
                 glib::MainContext::default().spawn_local(async move {
                     let Ok(Some(newer)) = gio::spawn_blocking(crate::system::webkit_update_check).await else { return };
-                    let command = crate::system::system_update_command();
+                    let command = crate::system::webkit_update_command();
                     window.show_prompt(
                         &format!(
-                            "Dein WebKitGTK {} ist veraltet – Version {newer} schließt Sicherheitslücken. Die Engine kommt vom System, aktualisiere es mit: {command}",
+                            "Dein WebKitGTK {} ist veraltet – Version {newer} schließt Sicherheitslücken. Nur die Engine aktualisieren (nicht das ganze System): {command}",
                             crate::system::webkit_version()
                         ),
                         "Befehl kopieren",

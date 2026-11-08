@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.8.1 – engine-only update command / nur-Engine-Update-Befehl
+
+**English**
+
+- The "WebKitGTK is outdated" warning now offers a command that updates only the engine, not the whole system (e.g. `sudo pacman -S webkit2gtk-4.1`).
+
+**Deutsch**
+
+- Die Warnung „WebKitGTK ist veraltet" zeigt jetzt einen Befehl, der nur die Engine aktualisiert, nicht das ganze System (z. B. `sudo pacman -S webkit2gtk-4.1`).
+
 ## v0.8.0 – security tools, certificates, better settings / Sicherheits-Werkzeuge, Zertifikate, bessere Einstellungen
 
 **English**

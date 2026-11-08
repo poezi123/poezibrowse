@@ -273,16 +273,13 @@ pub fn log_crash(uri: &str, reason: &str) {
     }
 }
 
-pub fn system_update_command() -> &'static str {
-    if os_release().0 == "garuda" {
-        return "garuda-update";
-    }
+pub fn webkit_update_command() -> &'static str {
     match family() {
-        Family::Arch => "sudo pacman -Syu",
-        Family::Debian => "sudo apt update && sudo apt upgrade",
-        Family::Fedora => "sudo dnf upgrade --refresh",
-        Family::Suse => "sudo zypper update",
-        Family::Other => "System über die Paketverwaltung aktualisieren",
+        Family::Arch => "sudo pacman -S webkit2gtk-4.1",
+        Family::Debian => "sudo apt install --only-upgrade libwebkit2gtk-4.1-0",
+        Family::Fedora => "sudo dnf upgrade webkit2gtk4.1",
+        Family::Suse => "sudo zypper update libwebkit2gtk-4_1-0",
+        Family::Other => "WebKitGTK über die Paketverwaltung aktualisieren",
     }
 }
 
