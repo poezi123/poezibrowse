@@ -33,6 +33,10 @@ for f in icudtl.dat v8_context_snapshot.bin snapshot_blob.bin chrome_100_percent
 done
 cp -a "$cefdir/locales/." "$dest/locales/" 2>/dev/null || true
 
+strip --strip-unneeded "$dest/libcef.so" 2>/dev/null || true
+strip --strip-unneeded "$dest/libvk_swiftshader.so" 2>/dev/null || true
+strip "$dest/poezibrowse" 2>/dev/null || true
+
 cat > "$dest/poezibrowse-chromium" <<'LAUNCH'
 #!/usr/bin/env bash
 here="$(cd "$(dirname "$0")" && pwd)"
