@@ -1249,8 +1249,8 @@ impl BrowserWindow {
         let Some(tab) = self.current_tab() else { return };
         let Some(current) = tab.engine() else { return };
         let other = match current {
-            EngineKind::Webkit => EngineKind::Servo,
-            EngineKind::Servo => EngineKind::Webkit,
+            EngineKind::Webkit => EngineKind::Chromium,
+            EngineKind::Chromium => EngineKind::Webkit,
         };
         let tor = tab.mode == Mode::Tor;
         if !other.available() || tor {

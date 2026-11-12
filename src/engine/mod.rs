@@ -1,3 +1,5 @@
+#[cfg(feature = "cef")]
+pub mod chromium;
 pub mod webkit;
 
 use std::cell::RefCell;

@@ -550,7 +550,7 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
             c.search_engine = v;
         }
         c.engine = match text("engine").as_deref() {
-            Some("servo") if EngineKind::Servo.available() => EngineKind::Servo,
+            Some("chromium") if EngineKind::Chromium.available() => EngineKind::Chromium,
             _ => EngineKind::Webkit,
         };
         c.tab_sleep_minutes = number("tab_sleep_minutes", 0, 24 * 60, c.tab_sleep_minutes);
@@ -691,7 +691,7 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         .iter()
         .map(|(id, name, _)| format!("<option value=\"{id}\"{}>{name}</option>", if *id == c.search_engine { " selected" } else { "" }))
         .collect();
-    let servo_disabled = if EngineKind::Servo.available() { "" } else { " disabled" };
+    let chromium_disabled = if EngineKind::Chromium.available() { "" } else { " disabled" };
     let row = |title: &str, hint: &str, input: String| {
         format!("<label class=\"title\">{title}<span class=\"hint\">{hint}</span></label><div>{input}</div>")
     };
@@ -700,12 +700,12 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         row("Suchmaschine", "", format!("<select name=\"search_engine\">{engines}</select>")),
         row(
             "Engine für neue Tabs",
-            "Servo ist experimentell",
+            "Chromium (Blink) für Seiten, die WebKit nicht mögen. Engine-Wechsel wirkt erst nach Neustart",
             format!(
-                "<select name=\"engine\"><option value=\"webkit\"{}>WebKit</option><option value=\"servo\"{}{servo_disabled}>Servo{}</option></select>",
+                "<select name=\"engine\"><option value=\"webkit\"{}>WebKit</option><option value=\"chromium\"{}{chromium_disabled}>Chromium{}</option></select>",
                 if c.engine == EngineKind::Webkit { " selected" } else { "" },
-                if c.engine == EngineKind::Servo { " selected" } else { "" },
-                if servo_disabled.is_empty() { "" } else { " (kommt später)" }
+                if c.engine == EngineKind::Chromium { " selected" } else { "" },
+                if chromium_disabled.is_empty() { "" } else { " (nicht eingebaut)" }
             ),
         ),
         row("Tabs schlafen legen nach", "Minuten ohne Benutzung, 0 = nie", format!("<input type=\"number\" min=\"0\" name=\"tab_sleep_minutes\" value=\"{}\">", c.tab_sleep_minutes)),
@@ -1116,7 +1116,7 @@ fn about_page(app: &App) -> String {
              <h2>Arbeitsspeicher</h2><table class=\"stats\">{processes}</table>\
              <h2>Status</h2><table class=\"stats\">\
                <tr><td>Engine für neue Tabs</td><td>{}</td></tr>\
-               <tr><td>Servo eingebaut</td><td>{}</td></tr>\
+               <tr><td>Chromium eingebaut</td><td>{}</td></tr>\
                <tr><td>Werbe- und Trackerblocker</td><td>{blocker}</td></tr>\
                <tr><td>Tabs schlafen nach</td><td>{}</td></tr>\
                <tr><td>Tabs pro Prozess</td><td>{}</td></tr>\
@@ -1125,7 +1125,7 @@ fn about_page(app: &App) -> String {
              <p class=\"muted\" style=\"margin-top:28px\">Quellcode: <a href=\"https://github.com/poezi123/poezibrowse\">github.com/poezi123/poezibrowse</a></p>",
             config::VERSION,
             c.engine.label(),
-            if EngineKind::Servo.available() { "ja" } else { "nein" },
+            if EngineKind::Chromium.available() { "ja" } else { "nein" },
             if c.tab_sleep_minutes == 0 { "nie".to_string() } else { format!("{} min", c.tab_sleep_minutes) },
             c.tabs_per_process,
             if c.ram_budget_mb == 0 { "aus".to_string() } else { format!("{} MB", c.ram_budget_mb) },

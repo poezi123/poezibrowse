@@ -359,9 +359,18 @@ impl App {
     }
 
     pub fn create_page(&self, engine: EngineKind, mode: Mode, uri: &str) -> Box<dyn Page> {
-        match engine {
-            _ => Box::new(PageHandle(self.webkit_engine(mode).create_page(None, uri))),
+        #[cfg(feature = "cef")]
+        if engine == EngineKind::Chromium && mode == Mode::Normal {
+            let (zoom, accelerated) = {
+                let c = self.config.borrow();
+                (c.default_zoom, c.hardware_acceleration)
+            };
+            if let Some(page) = crate::engine::chromium::ChromiumPage::new(uri, zoom, accelerated) {
+                return page;
+            }
         }
+        let _ = engine;
+        Box::new(PageHandle(self.webkit_engine(mode).create_page(None, uri)))
     }
 
     pub fn homepage(&self, mode: Mode) -> String {
