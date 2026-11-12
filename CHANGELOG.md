@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.8.2 – captchas / Captchas
+
+**English**
+
+- Captchas work more reliably: the fingerprinting protection is no longer applied inside captcha frames (Google reCAPTCHA, hCaptcha, Cloudflare challenges).
+
+**Deutsch**
+
+- Captchas funktionieren zuverlässiger: Der Fingerprint-Schutz wird nicht mehr in Captcha-Frames angewendet (Google reCAPTCHA, hCaptcha, Cloudflare-Challenges).
+
 ## v0.8.1 – engine-only update command / nur-Engine-Update-Befehl
 
 **English**

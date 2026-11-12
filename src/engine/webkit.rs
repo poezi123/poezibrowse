@@ -22,6 +22,16 @@ use crate::config::{self, Config, EngineKind, Fingerprint, Mode, PermissionKind,
 
 pub type SchemeHandler = Rc<dyn Fn(&str) -> (String, Vec<u8>)>;
 
+const CAPTCHA_HOSTS: &[&str] = &[
+    "*://www.google.com/recaptcha/*",
+    "*://*.google.com/recaptcha/*",
+    "*://*.gstatic.com/recaptcha/*",
+    "*://*.recaptcha.net/*",
+    "*://*.hcaptcha.com/*",
+    "*://hcaptcha.com/*",
+    "*://challenges.cloudflare.com/*",
+];
+
 pub struct WebKitEngine {
     context: WebContext,
     settings: Settings,
@@ -182,7 +192,7 @@ impl WebKitEngine {
                 webkit2gtk::UserContentInjectedFrames::AllFrames,
                 webkit2gtk::UserScriptInjectionTime::Start,
                 &[],
-                &[],
+                CAPTCHA_HOSTS,
             )
         });
 
