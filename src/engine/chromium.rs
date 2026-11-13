@@ -48,6 +48,7 @@ wrap_app! {
             );
             command_line.append_switch(Some(&CefString::from("disable-gpu")));
             command_line.append_switch(Some(&CefString::from("disable-gpu-compositing")));
+            command_line.append_switch(Some(&CefString::from("no-sandbox")));
         }
     }
 }
@@ -76,6 +77,10 @@ pub fn ensure_initialized() -> bool {
     settings.external_message_pump = 0;
     settings.multi_threaded_message_loop = 0;
     settings.windowless_rendering_enabled = 1;
+    if std::env::var_os("POEZI_CEF_LOG").is_some() {
+        settings.log_severity = LogSeverity::INFO;
+        settings.log_file = CefString::from("/tmp/poezi-cef.log");
+    }
     if let Some(dir) = cache_dir() {
         settings.root_cache_path = CefString::from(dir.as_str());
         settings.cache_path = CefString::from(dir.as_str());
@@ -114,6 +119,7 @@ struct Inner {
     can_fwd: Cell<bool>,
     zoom: Cell<f64>,
     pending_uri: RefCell<Option<String>>,
+    mapped: Cell<bool>,
     size: Cell<(i32, i32)>,
     surface: RefCell<Option<cairo::ImageSurface>>,
     area: RefCell<Option<glib::WeakRef<gtk::DrawingArea>>>,
@@ -131,6 +137,7 @@ impl Inner {
             can_fwd: Cell::new(false),
             zoom: Cell::new(zoom),
             pending_uri: RefCell::new(None),
+            mapped: Cell::new(false),
             size: Cell::new((800, 600)),
             surface: RefCell::new(None),
             area: RefCell::new(None),
@@ -150,6 +157,20 @@ fn cef_str(value: Option<&CefString>) -> Option<String> {
     value.and_then(|s| CefStringUtf8::from(s).as_str().map(str::to_owned))
 }
 
+fn try_load(inner: &Rc<Inner>) {
+    if !inner.mapped.get() {
+        return;
+    }
+    let borrow = inner.browser.borrow();
+    let Some(browser) = borrow.as_ref() else { return };
+    let uri = inner.pending_uri.borrow_mut().take();
+    if let Some(uri) = uri {
+        if let Some(frame) = browser.main_frame() {
+            frame.load_url(Some(&CefString::from(uri.as_str())));
+        }
+    }
+}
+
 wrap_life_span_handler! {
     pub struct PoeziLifeSpan {
         inner: Rc<Inner>,
@@ -165,11 +186,11 @@ wrap_life_span_handler! {
                     host.set_zoom_level(level.ln() / 1.2f64.ln());
                 }
             }
-            if let Some(uri) = self.inner.pending_uri.borrow_mut().take() {
-                if let Some(frame) = browser.main_frame() {
-                    frame.load_url(Some(&CefString::from(uri.as_str())));
-                }
+            if let Some(host) = browser.host() {
+                host.was_hidden(if self.inner.mapped.get() { 0 } else { 1 });
+                host.was_resized();
             }
+            try_load(&self.inner);
         }
 
         fn do_close(&self, _browser: Option<&mut Browser>) -> ::std::os::raw::c_int {
@@ -338,23 +359,18 @@ fn spawn_browser(inner: &Rc<Inner>) {
     let render = PoeziRender::new(inner.clone());
     let mut client = PoeziClient::new(life, load, display, render);
 
-    let url = inner.pending_uri.borrow().clone();
-    let url_cef = url.as_deref().map(CefString::from);
     let mut window_info = WindowInfo::default().set_as_windowless(0);
     window_info.runtime_style = RuntimeStyle::ALLOY;
     let browser_settings = BrowserSettings::default();
 
-    let ok = cef::browser_host_create_browser(
+    cef::browser_host_create_browser(
         Some(&window_info),
         Some(&mut client),
-        url_cef.as_ref(),
+        None,
         Some(&browser_settings),
         None,
         None,
     );
-    if ok == 1 {
-        inner.pending_uri.replace(None);
-    }
 }
 
 fn mods_from_state(state: gdk::ModifierType) -> u32 {
@@ -446,8 +462,29 @@ impl ChromiumPage {
             if let Some(surface) = draw_inner.surface.borrow().as_ref() {
                 let _ = cr.set_source_surface(surface, 0.0, 0.0);
                 let _ = cr.paint();
+            } else {
+                cr.set_source_rgb(1.0, 1.0, 1.0);
+                let _ = cr.paint();
             }
-            glib::Propagation::Proceed
+            glib::Propagation::Stop
+        });
+
+        let map_inner = inner.clone();
+        area.connect_map(move |_area| {
+            map_inner.mapped.set(true);
+            if let Some(host) = map_inner.browser.borrow().as_ref().and_then(Browser::host) {
+                host.was_hidden(0);
+                host.was_resized();
+            }
+            try_load(&map_inner);
+        });
+
+        let unmap_inner = inner.clone();
+        area.connect_unmap(move |_area| {
+            unmap_inner.mapped.set(false);
+            if let Some(host) = unmap_inner.browser.borrow().as_ref().and_then(Browser::host) {
+                host.was_hidden(1);
+            }
         });
 
         let resize_inner = inner.clone();
@@ -634,19 +671,8 @@ impl Page for ChromiumPage {
     }
 
     fn load_uri(&self, uri: &str) {
-        let loaded = self
-            .with_browser(|browser| {
-                if let Some(frame) = browser.main_frame() {
-                    frame.load_url(Some(&CefString::from(uri)));
-                    true
-                } else {
-                    false
-                }
-            })
-            .unwrap_or(false);
-        if !loaded {
-            self.inner.pending_uri.replace(Some(uri.to_string()));
-        }
+        self.inner.pending_uri.replace(Some(uri.to_string()));
+        try_load(&self.inner);
     }
 
     fn reload(&self, bypass_cache: bool) {
