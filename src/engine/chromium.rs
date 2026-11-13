@@ -157,6 +157,11 @@ fn cef_str(value: Option<&CefString>) -> Option<String> {
     value.and_then(|s| CefStringUtf8::from(s).as_str().map(str::to_owned))
 }
 
+fn host_of(inner: &Rc<Inner>) -> Option<BrowserHost> {
+    let browser = inner.browser.borrow().clone();
+    browser.and_then(|b| b.host())
+}
+
 fn try_load(inner: &Rc<Inner>) {
     if !inner.mapped.get() {
         return;
@@ -187,6 +192,7 @@ wrap_life_span_handler! {
                 }
             }
             if let Some(host) = browser.host() {
+                host.set_windowless_frame_rate(60);
                 host.was_hidden(if self.inner.mapped.get() { 0 } else { 1 });
                 host.was_resized();
             }
@@ -276,6 +282,38 @@ wrap_display_handler! {
         fn on_loading_progress_change(&self, _browser: Option<&mut Browser>, progress: f64) {
             self.inner.sink.emit(PageEvent::Progress(progress));
         }
+
+        fn on_cursor_change(
+            &self,
+            _browser: Option<&mut Browser>,
+            _cursor: ::std::os::raw::c_ulong,
+            type_: CursorType,
+            _custom_cursor_info: Option<&CursorInfo>,
+        ) -> ::std::os::raw::c_int {
+            let name = if type_ == CursorType::HAND {
+                "pointer"
+            } else if type_ == CursorType::IBEAM {
+                "text"
+            } else if type_ == CursorType::CROSS {
+                "crosshair"
+            } else if type_ == CursorType::WAIT {
+                "wait"
+            } else if type_ == CursorType::HELP {
+                "help"
+            } else if type_ == CursorType::MOVE {
+                "move"
+            } else {
+                "default"
+            };
+            if let Some(area) = self.inner.area.borrow().as_ref().and_then(glib::WeakRef::upgrade) {
+                if let Some(window) = area.window() {
+                    let display = area.display();
+                    let cursor = gdk::Cursor::from_name(&display, name);
+                    window.set_cursor(cursor.as_ref());
+                }
+            }
+            1
+        }
     }
 }
 
@@ -311,16 +349,29 @@ wrap_render_handler! {
             }
             let stride = width * 4;
             let len = (stride * height) as usize;
-            let mut data = vec![0u8; len];
-            unsafe {
-                std::ptr::copy_nonoverlapping(buffer, data.as_mut_ptr(), len);
+            let src = unsafe { std::slice::from_raw_parts(buffer, len) };
+            let mut cell = self.inner.surface.borrow_mut();
+            let reuse = cell
+                .as_ref()
+                .is_some_and(|s| s.width() == width && s.height() == height);
+            if reuse {
+                if let Some(surface) = cell.as_mut() {
+                    surface.flush();
+                    if let Ok(mut sdata) = surface.data() {
+                        sdata.copy_from_slice(src);
+                    }
+                    surface.mark_dirty();
+                }
+            } else {
+                let data = src.to_vec();
+                if let Ok(surface) =
+                    cairo::ImageSurface::create_for_data(data, cairo::Format::ARgb32, width, height, stride)
+                {
+                    *cell = Some(surface);
+                }
             }
-            if let Ok(surface) =
-                cairo::ImageSurface::create_for_data(data, cairo::Format::ARgb32, width, height, stride)
-            {
-                self.inner.surface.replace(Some(surface));
-                self.inner.queue_draw();
-            }
+            drop(cell);
+            self.inner.queue_draw();
         }
     }
 }
@@ -472,7 +523,7 @@ impl ChromiumPage {
         let map_inner = inner.clone();
         area.connect_map(move |_area| {
             map_inner.mapped.set(true);
-            if let Some(host) = map_inner.browser.borrow().as_ref().and_then(Browser::host) {
+            if let Some(host) = host_of(&map_inner) {
                 host.was_hidden(0);
                 host.was_resized();
             }
@@ -482,7 +533,7 @@ impl ChromiumPage {
         let unmap_inner = inner.clone();
         area.connect_unmap(move |_area| {
             unmap_inner.mapped.set(false);
-            if let Some(host) = unmap_inner.browser.borrow().as_ref().and_then(Browser::host) {
+            if let Some(host) = host_of(&unmap_inner) {
                 host.was_hidden(1);
             }
         });
@@ -502,7 +553,7 @@ impl ChromiumPage {
 
         let motion_inner = inner.clone();
         area.connect_motion_notify_event(move |_area, ev| {
-            if let Some(host) = motion_inner.browser.borrow().as_ref().and_then(Browser::host) {
+            if let Some(host) = host_of(&motion_inner) {
                 let (x, y) = ev.position();
                 let event = MouseEvent {
                     x: x as i32,
@@ -517,7 +568,7 @@ impl ChromiumPage {
         let press_inner = inner.clone();
         area.connect_button_press_event(move |area, ev| {
             area.grab_focus();
-            if let Some(host) = press_inner.browser.borrow().as_ref().and_then(Browser::host) {
+            if let Some(host) = host_of(&press_inner) {
                 let (x, y) = ev.position();
                 let event = MouseEvent {
                     x: x as i32,
@@ -537,7 +588,7 @@ impl ChromiumPage {
 
         let release_inner = inner.clone();
         area.connect_button_release_event(move |_area, ev| {
-            if let Some(host) = release_inner.browser.borrow().as_ref().and_then(Browser::host) {
+            if let Some(host) = host_of(&release_inner) {
                 let (x, y) = ev.position();
                 let event = MouseEvent {
                     x: x as i32,
@@ -556,7 +607,7 @@ impl ChromiumPage {
 
         let scroll_inner = inner.clone();
         area.connect_scroll_event(move |_area, ev| {
-            if let Some(host) = scroll_inner.browser.borrow().as_ref().and_then(Browser::host) {
+            if let Some(host) = host_of(&scroll_inner) {
                 let (x, y) = ev.position();
                 let event = MouseEvent {
                     x: x as i32,
@@ -573,14 +624,14 @@ impl ChromiumPage {
                         _ => {}
                     }
                 }
-                host.send_mouse_wheel_event(Some(&event), (-dx * 40.0) as i32, (-dy * 40.0) as i32);
+                host.send_mouse_wheel_event(Some(&event), (-dx * 100.0) as i32, (-dy * 100.0) as i32);
             }
             glib::Propagation::Stop
         });
 
         let leave_inner = inner.clone();
         area.connect_leave_notify_event(move |_area, ev| {
-            if let Some(host) = leave_inner.browser.borrow().as_ref().and_then(Browser::host) {
+            if let Some(host) = host_of(&leave_inner) {
                 let (x, y) = ev.position();
                 let event = MouseEvent {
                     x: x as i32,
@@ -609,12 +660,13 @@ impl ChromiumPage {
     }
 
     fn with_browser<R>(&self, f: impl FnOnce(&Browser) -> R) -> Option<R> {
-        self.inner.browser.borrow().as_ref().map(f)
+        let browser = self.inner.browser.borrow().clone();
+        browser.as_ref().map(f)
     }
 }
 
 fn send_key(inner: &Rc<Inner>, ev: &gdk::EventKey, release: bool) {
-    let Some(host) = inner.browser.borrow().as_ref().and_then(Browser::host) else {
+    let Some(host) = host_of(&inner) else {
         return;
     };
     let keyval = ev.keyval();
