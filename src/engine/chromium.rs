@@ -1,39 +1,25 @@
 use std::cell::{Cell, RefCell};
-use std::os::raw::{c_int, c_uint, c_ulong, c_void};
 use std::rc::Rc;
 
 use cef::rc::Rc as _;
 use cef::*;
+use gtk::cairo;
+use gtk::gdk;
 use gtk::glib;
-use gtk::glib::translate::ToGlibPtr;
 use gtk::prelude::*;
 
 use crate::config::EngineKind;
 use crate::engine::{Page, PageEvent, SinkSlot};
 
-#[link(name = "gdk-3")]
-unsafe extern "C" {
-    fn gdk_x11_window_get_xid(window: *mut c_void) -> c_ulong;
-    fn gdk_x11_display_get_xdisplay(display: *mut c_void) -> *mut c_void;
-    fn gdk_window_ensure_native(window: *mut c_void) -> c_int;
-}
-
-#[link(name = "X11")]
-unsafe extern "C" {
-    fn XMoveResizeWindow(
-        display: *mut c_void,
-        window: c_ulong,
-        x: c_int,
-        y: c_int,
-        width: c_uint,
-        height: c_uint,
-    ) -> c_int;
-    fn XFlush(display: *mut c_void) -> c_int;
-}
+const EVENTFLAG_SHIFT_DOWN: u32 = 1 << 1;
+const EVENTFLAG_CONTROL_DOWN: u32 = 1 << 2;
+const EVENTFLAG_ALT_DOWN: u32 = 1 << 3;
+const EVENTFLAG_LEFT_MOUSE_BUTTON: u32 = 1 << 4;
+const EVENTFLAG_MIDDLE_MOUSE_BUTTON: u32 = 1 << 5;
+const EVENTFLAG_RIGHT_MOUSE_BUTTON: u32 = 1 << 6;
 
 thread_local! {
     static INITIALIZED: Cell<bool> = const { Cell::new(false) };
-    static ACCELERATED: Cell<bool> = const { Cell::new(true) };
 }
 
 fn cache_dir() -> Option<String> {
@@ -60,10 +46,8 @@ wrap_app! {
                 Some(&CefString::from("ozone-platform")),
                 Some(&CefString::from("x11")),
             );
-            if !ACCELERATED.with(Cell::get) {
-                command_line.append_switch(Some(&CefString::from("disable-gpu")));
-                command_line.append_switch(Some(&CefString::from("disable-gpu-compositing")));
-            }
+            command_line.append_switch(Some(&CefString::from("disable-gpu")));
+            command_line.append_switch(Some(&CefString::from("disable-gpu-compositing")));
         }
     }
 }
@@ -91,7 +75,7 @@ pub fn ensure_initialized() -> bool {
     settings.no_sandbox = 1;
     settings.external_message_pump = 0;
     settings.multi_threaded_message_loop = 0;
-    settings.windowless_rendering_enabled = 0;
+    settings.windowless_rendering_enabled = 1;
     if let Some(dir) = cache_dir() {
         settings.root_cache_path = CefString::from(dir.as_str());
         settings.cache_path = CefString::from(dir.as_str());
@@ -130,8 +114,9 @@ struct Inner {
     can_fwd: Cell<bool>,
     zoom: Cell<f64>,
     pending_uri: RefCell<Option<String>>,
-    created: Cell<bool>,
     size: Cell<(i32, i32)>,
+    surface: RefCell<Option<cairo::ImageSurface>>,
+    area: RefCell<Option<glib::WeakRef<gtk::DrawingArea>>>,
 }
 
 impl Inner {
@@ -146,35 +131,18 @@ impl Inner {
             can_fwd: Cell::new(false),
             zoom: Cell::new(zoom),
             pending_uri: RefCell::new(None),
-            created: Cell::new(false),
-            size: Cell::new((1, 1)),
+            size: Cell::new((800, 600)),
+            surface: RefCell::new(None),
+            area: RefCell::new(None),
         }
     }
-}
 
-fn default_xdisplay() -> Option<*mut c_void> {
-    let display = gtk::gdk::Display::default()?;
-    let display_native: *mut gtk::gdk::ffi::GdkDisplay = display.to_glib_none().0;
-    if display_native.is_null() {
-        return None;
-    }
-    let xdisplay = unsafe { gdk_x11_display_get_xdisplay(display_native as *mut c_void) };
-    if xdisplay.is_null() { None } else { Some(xdisplay) }
-}
-
-fn apply_cef_size(inner: &Rc<Inner>) {
-    let borrow = inner.browser.borrow();
-    let Some(browser) = borrow.as_ref() else { return };
-    let Some(host) = browser.host() else { return };
-    let xid = host.window_handle();
-    if xid == 0 {
-        return;
-    }
-    let Some(xdisplay) = default_xdisplay() else { return };
-    let (width, height) = inner.size.get();
-    unsafe {
-        XMoveResizeWindow(xdisplay, xid, 0, 0, width.max(1) as c_uint, height.max(1) as c_uint);
-        XFlush(xdisplay);
+    fn queue_draw(&self) {
+        if let Some(weak) = self.area.borrow().as_ref() {
+            if let Some(area) = weak.upgrade() {
+                area.queue_draw();
+            }
+        }
     }
 }
 
@@ -202,7 +170,6 @@ wrap_life_span_handler! {
                     frame.load_url(Some(&CefString::from(uri.as_str())));
                 }
             }
-            apply_cef_size(&self.inner);
         }
 
         fn do_close(&self, _browser: Option<&mut Browser>) -> ::std::os::raw::c_int {
@@ -291,11 +258,58 @@ wrap_display_handler! {
     }
 }
 
+wrap_render_handler! {
+    pub struct PoeziRender {
+        inner: Rc<Inner>,
+    }
+
+    impl RenderHandler {
+        fn view_rect(&self, _browser: Option<&mut Browser>, rect: Option<&mut Rect>) {
+            let Some(rect) = rect else { return };
+            let (w, h) = self.inner.size.get();
+            rect.x = 0;
+            rect.y = 0;
+            rect.width = w.max(1);
+            rect.height = h.max(1);
+        }
+
+        fn on_paint(
+            &self,
+            _browser: Option<&mut Browser>,
+            type_: PaintElementType,
+            _dirty_rects: Option<&[Rect]>,
+            buffer: *const u8,
+            width: ::std::os::raw::c_int,
+            height: ::std::os::raw::c_int,
+        ) {
+            if type_ != PaintElementType::VIEW {
+                return;
+            }
+            if buffer.is_null() || width <= 0 || height <= 0 {
+                return;
+            }
+            let stride = width * 4;
+            let len = (stride * height) as usize;
+            let mut data = vec![0u8; len];
+            unsafe {
+                std::ptr::copy_nonoverlapping(buffer, data.as_mut_ptr(), len);
+            }
+            if let Ok(surface) =
+                cairo::ImageSurface::create_for_data(data, cairo::Format::ARgb32, width, height, stride)
+            {
+                self.inner.surface.replace(Some(surface));
+                self.inner.queue_draw();
+            }
+        }
+    }
+}
+
 wrap_client! {
     pub struct PoeziClient {
         life: LifeSpanHandler,
         load: LoadHandler,
         display: DisplayHandler,
+        render: RenderHandler,
     }
 
     impl Client {
@@ -310,27 +324,23 @@ wrap_client! {
         fn display_handler(&self) -> Option<DisplayHandler> {
             Some(self.display.clone())
         }
+
+        fn render_handler(&self) -> Option<RenderHandler> {
+            Some(self.render.clone())
+        }
     }
 }
 
-fn spawn_browser(inner: &Rc<Inner>, parent: c_ulong, width: i32, height: i32) {
-    if inner.created.get() {
-        return;
-    }
+fn spawn_browser(inner: &Rc<Inner>) {
     let life = PoeziLifeSpan::new(inner.clone());
     let load = PoeziLoad::new(inner.clone());
     let display = PoeziDisplay::new(inner.clone());
-    let mut client = PoeziClient::new(life, load, display);
+    let render = PoeziRender::new(inner.clone());
+    let mut client = PoeziClient::new(life, load, display, render);
 
     let url = inner.pending_uri.borrow().clone();
     let url_cef = url.as_deref().map(CefString::from);
-    let bounds = Rect {
-        x: 0,
-        y: 0,
-        width: width.max(1),
-        height: height.max(1),
-    };
-    let mut window_info = WindowInfo::default().set_as_child(parent, &bounds);
+    let mut window_info = WindowInfo::default().set_as_windowless(0);
     window_info.runtime_style = RuntimeStyle::ALLOY;
     let browser_settings = BrowserSettings::default();
 
@@ -342,9 +352,60 @@ fn spawn_browser(inner: &Rc<Inner>, parent: c_ulong, width: i32, height: i32) {
         None,
         None,
     );
-    inner.created.set(ok == 1);
     if ok == 1 {
         inner.pending_uri.replace(None);
+    }
+}
+
+fn mods_from_state(state: gdk::ModifierType) -> u32 {
+    let mut m = 0;
+    if state.contains(gdk::ModifierType::SHIFT_MASK) {
+        m |= EVENTFLAG_SHIFT_DOWN;
+    }
+    if state.contains(gdk::ModifierType::CONTROL_MASK) {
+        m |= EVENTFLAG_CONTROL_DOWN;
+    }
+    if state.contains(gdk::ModifierType::MOD1_MASK) {
+        m |= EVENTFLAG_ALT_DOWN;
+    }
+    if state.contains(gdk::ModifierType::BUTTON1_MASK) {
+        m |= EVENTFLAG_LEFT_MOUSE_BUTTON;
+    }
+    if state.contains(gdk::ModifierType::BUTTON2_MASK) {
+        m |= EVENTFLAG_MIDDLE_MOUSE_BUTTON;
+    }
+    if state.contains(gdk::ModifierType::BUTTON3_MASK) {
+        m |= EVENTFLAG_RIGHT_MOUSE_BUTTON;
+    }
+    m
+}
+
+fn vk_from_keyval(key: &gdk::keys::Key) -> i32 {
+    use gdk::keys::constants as k;
+    match *key {
+        k::Return | k::KP_Enter | k::ISO_Enter => 0x0D,
+        k::BackSpace => 0x08,
+        k::Tab | k::ISO_Left_Tab => 0x09,
+        k::Escape => 0x1B,
+        k::Delete | k::KP_Delete => 0x2E,
+        k::Insert | k::KP_Insert => 0x2D,
+        k::Left | k::KP_Left => 0x25,
+        k::Up | k::KP_Up => 0x26,
+        k::Right | k::KP_Right => 0x27,
+        k::Down | k::KP_Down => 0x28,
+        k::Home | k::KP_Home => 0x24,
+        k::End | k::KP_End => 0x23,
+        k::Page_Up | k::KP_Page_Up => 0x21,
+        k::Page_Down | k::KP_Page_Down => 0x22,
+        k::space => 0x20,
+        k::Control_L | k::Control_R => 0x11,
+        k::Shift_L | k::Shift_R => 0x10,
+        k::Alt_L | k::Alt_R => 0x12,
+        _ => key
+            .to_unicode()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .map(|c| c.to_ascii_uppercase() as i32)
+            .unwrap_or(0),
     }
 }
 
@@ -354,8 +415,7 @@ pub struct ChromiumPage {
 }
 
 impl ChromiumPage {
-    pub fn new(uri: &str, zoom: f64, accelerated: bool) -> Option<Box<dyn Page>> {
-        ACCELERATED.with(|a| a.set(accelerated));
+    pub fn new(uri: &str, zoom: f64, _accelerated: bool) -> Option<Box<dyn Page>> {
         if !ensure_initialized() {
             return None;
         }
@@ -368,47 +428,195 @@ impl ChromiumPage {
         area.set_hexpand(true);
         area.set_vexpand(true);
         area.set_can_focus(true);
-        area.add_events(gtk::gdk::EventMask::BUTTON_PRESS_MASK);
+        area.add_events(
+            gdk::EventMask::POINTER_MOTION_MASK
+                | gdk::EventMask::BUTTON_PRESS_MASK
+                | gdk::EventMask::BUTTON_RELEASE_MASK
+                | gdk::EventMask::SCROLL_MASK
+                | gdk::EventMask::KEY_PRESS_MASK
+                | gdk::EventMask::KEY_RELEASE_MASK
+                | gdk::EventMask::ENTER_NOTIFY_MASK
+                | gdk::EventMask::LEAVE_NOTIFY_MASK
+                | gdk::EventMask::FOCUS_CHANGE_MASK,
+        );
+        inner.area.replace(Some(area.downgrade()));
 
-        let realize_inner = inner.clone();
-        area.connect_realize(move |area| {
-            let Some(window) = area.window() else { return };
-            let window_native: *mut gtk::gdk::ffi::GdkWindow = window.to_glib_none().0;
-            let window_ptr = window_native as *mut c_void;
-            if window_ptr.is_null() {
-                return;
-            }
-            unsafe { gdk_window_ensure_native(window_ptr) };
-            let xid = unsafe { gdk_x11_window_get_xid(window_ptr) };
-            if xid == 0 {
-                return;
-            }
-            let alloc = area.allocation();
-            realize_inner.size.set((alloc.width(), alloc.height()));
-            spawn_browser(&realize_inner, xid, alloc.width(), alloc.height());
-        });
-
-        let resize_inner = inner.clone();
-        area.connect_size_allocate(move |_area, alloc| {
-            resize_inner.size.set((alloc.width(), alloc.height()));
-            apply_cef_size(&resize_inner);
-        });
-
-        let focus_inner = inner.clone();
-        area.connect_button_press_event(move |_area, _event| {
-            if let Some(browser) = focus_inner.browser.borrow().as_ref() {
-                if let Some(host) = browser.host() {
-                    host.set_focus(1);
-                }
+        let draw_inner = inner.clone();
+        area.connect_draw(move |_area, cr| {
+            if let Some(surface) = draw_inner.surface.borrow().as_ref() {
+                let _ = cr.set_source_surface(surface, 0.0, 0.0);
+                let _ = cr.paint();
             }
             glib::Propagation::Proceed
         });
 
+        let resize_inner = inner.clone();
+        area.connect_size_allocate(move |_area, alloc| {
+            let new = (alloc.width().max(1), alloc.height().max(1));
+            if resize_inner.size.get() != new {
+                resize_inner.size.set(new);
+                if let Some(browser) = resize_inner.browser.borrow().as_ref() {
+                    if let Some(host) = browser.host() {
+                        host.was_resized();
+                    }
+                }
+            }
+        });
+
+        let motion_inner = inner.clone();
+        area.connect_motion_notify_event(move |_area, ev| {
+            if let Some(host) = motion_inner.browser.borrow().as_ref().and_then(Browser::host) {
+                let (x, y) = ev.position();
+                let event = MouseEvent {
+                    x: x as i32,
+                    y: y as i32,
+                    modifiers: mods_from_state(ev.state()),
+                };
+                host.send_mouse_move_event(Some(&event), 0);
+            }
+            glib::Propagation::Proceed
+        });
+
+        let press_inner = inner.clone();
+        area.connect_button_press_event(move |area, ev| {
+            area.grab_focus();
+            if let Some(host) = press_inner.browser.borrow().as_ref().and_then(Browser::host) {
+                let (x, y) = ev.position();
+                let event = MouseEvent {
+                    x: x as i32,
+                    y: y as i32,
+                    modifiers: mods_from_state(ev.state()),
+                };
+                let button = match ev.button() {
+                    2 => MouseButtonType::MIDDLE,
+                    3 => MouseButtonType::RIGHT,
+                    _ => MouseButtonType::LEFT,
+                };
+                host.set_focus(1);
+                host.send_mouse_click_event(Some(&event), button, 0, 1);
+            }
+            glib::Propagation::Proceed
+        });
+
+        let release_inner = inner.clone();
+        area.connect_button_release_event(move |_area, ev| {
+            if let Some(host) = release_inner.browser.borrow().as_ref().and_then(Browser::host) {
+                let (x, y) = ev.position();
+                let event = MouseEvent {
+                    x: x as i32,
+                    y: y as i32,
+                    modifiers: mods_from_state(ev.state()),
+                };
+                let button = match ev.button() {
+                    2 => MouseButtonType::MIDDLE,
+                    3 => MouseButtonType::RIGHT,
+                    _ => MouseButtonType::LEFT,
+                };
+                host.send_mouse_click_event(Some(&event), button, 1, 1);
+            }
+            glib::Propagation::Proceed
+        });
+
+        let scroll_inner = inner.clone();
+        area.connect_scroll_event(move |_area, ev| {
+            if let Some(host) = scroll_inner.browser.borrow().as_ref().and_then(Browser::host) {
+                let (x, y) = ev.position();
+                let event = MouseEvent {
+                    x: x as i32,
+                    y: y as i32,
+                    modifiers: mods_from_state(ev.state()),
+                };
+                let (mut dx, mut dy) = ev.delta();
+                if dx == 0.0 && dy == 0.0 {
+                    match ev.direction() {
+                        gdk::ScrollDirection::Up => dy = -1.0,
+                        gdk::ScrollDirection::Down => dy = 1.0,
+                        gdk::ScrollDirection::Left => dx = -1.0,
+                        gdk::ScrollDirection::Right => dx = 1.0,
+                        _ => {}
+                    }
+                }
+                host.send_mouse_wheel_event(Some(&event), (-dx * 40.0) as i32, (-dy * 40.0) as i32);
+            }
+            glib::Propagation::Stop
+        });
+
+        let leave_inner = inner.clone();
+        area.connect_leave_notify_event(move |_area, ev| {
+            if let Some(host) = leave_inner.browser.borrow().as_ref().and_then(Browser::host) {
+                let (x, y) = ev.position();
+                let event = MouseEvent {
+                    x: x as i32,
+                    y: y as i32,
+                    modifiers: mods_from_state(ev.state()),
+                };
+                host.send_mouse_move_event(Some(&event), 1);
+            }
+            glib::Propagation::Proceed
+        });
+
+        let key_press_inner = inner.clone();
+        area.connect_key_press_event(move |_area, ev| {
+            send_key(&key_press_inner, ev, false);
+            glib::Propagation::Stop
+        });
+
+        let key_release_inner = inner.clone();
+        area.connect_key_release_event(move |_area, ev| {
+            send_key(&key_release_inner, ev, true);
+            glib::Propagation::Stop
+        });
+
+        spawn_browser(&inner);
         Some(Box::new(ChromiumPage { area, inner }))
     }
 
     fn with_browser<R>(&self, f: impl FnOnce(&Browser) -> R) -> Option<R> {
         self.inner.browser.borrow().as_ref().map(f)
+    }
+}
+
+fn send_key(inner: &Rc<Inner>, ev: &gdk::EventKey, release: bool) {
+    let Some(host) = inner.browser.borrow().as_ref().and_then(Browser::host) else {
+        return;
+    };
+    let keyval = ev.keyval();
+    let modifiers = mods_from_state(ev.state());
+    let vk = vk_from_keyval(&keyval);
+    let native = ev.hardware_keycode() as i32;
+
+    let mut event = KeyEvent {
+        modifiers,
+        windows_key_code: vk,
+        native_key_code: native,
+        ..Default::default()
+    };
+
+    if release {
+        event.type_ = KeyEventType::KEYUP;
+        host.send_key_event(Some(&event));
+        return;
+    }
+
+    event.type_ = KeyEventType::RAWKEYDOWN;
+    host.send_key_event(Some(&event));
+
+    if let Some(ch) = keyval.to_unicode() {
+        if !ch.is_control() {
+            let mut units = [0u16; 2];
+            for unit in ch.encode_utf16(&mut units).iter() {
+                let mut char_event = KeyEvent {
+                    modifiers,
+                    windows_key_code: *unit as i32,
+                    native_key_code: native,
+                    character: *unit,
+                    unmodified_character: *unit,
+                    ..Default::default()
+                };
+                char_event.type_ = KeyEventType::CHAR;
+                host.send_key_event(Some(&char_event));
+            }
+        }
     }
 }
 
