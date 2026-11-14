@@ -717,7 +717,7 @@ fn settings_page(app: &App, params: &[(String, String)], authorized: bool) -> St
         row("Blocker-Ausnahmen", "Eine Domain pro Zeile", format!("<textarea name=\"block_allowlist\">{}</textarea>", escape(&c.block_allowlist.join("\n")))),
         row("Tabs beim Start wiederherstellen", "", format!("<input type=\"checkbox\" name=\"restore_session\"{}>", checked(c.restore_session))),
         row("Videos mit Ton automatisch abspielen *", "", format!("<input type=\"checkbox\" name=\"autoplay_sound\"{}>", checked(c.autoplay_sound))),
-        row("Hardwarebeschleunigung *", "", format!("<input type=\"checkbox\" name=\"hardware_acceleration\"{}>", checked(c.hardware_acceleration))),
+        row("Hardwarebeschleunigung *", "In Chromium-Tabs: GPU-Rasterung für flüssiges Scrollen. Bei Grafikproblemen (schwarze Seiten) abschalten – dann rendert Chromium per Software", format!("<input type=\"checkbox\" name=\"hardware_acceleration\"{}>", checked(c.hardware_acceleration))),
         row("Video-Darstellung *", "Wenn Videos grün oder flackernd erscheinen (häufig bei NVIDIA): „Kompatibel“ oder „Software“ wählen", {
             let opt = |v: &str, l: &str, sel: bool| format!("<option value=\"{v}\"{}>{l}</option>", if sel { " selected" } else { "" });
             format!(
