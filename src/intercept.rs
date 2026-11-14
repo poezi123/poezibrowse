@@ -8,7 +8,7 @@ use gtk::glib::translate::IntoGlib;
 use gtk::prelude::*;
 use soup::prelude::*;
 
-use crate::engine::webkit::Held;
+use crate::engine::Held;
 
 #[derive(Clone, Default)]
 pub struct RequestRecord {

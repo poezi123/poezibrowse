@@ -49,7 +49,7 @@ pub struct WebKitEngine {
     fingerprint_script: Option<webkit2gtk::UserScript>,
     pub log_requests: std::cell::Cell<bool>,
     pub intercepting: std::cell::Cell<bool>,
-    pub on_intercept: RefCell<Option<Rc<dyn Fn(Held)>>>,
+    pub on_intercept: RefCell<Option<crate::engine::InterceptRoute>>,
     intercept_bypass: Rc<RefCell<std::collections::HashSet<String>>>,
     tor_https_only: bool,
     https_only: bool,
@@ -690,13 +690,23 @@ impl WebKitPage {
                                     .and_then(|r| webkit2gtk::URIRequestExt::http_method(&r))
                                     .map(|m| m.to_string())
                                     .unwrap_or_else(|| "GET".into());
-                                callback(Held {
-                                    decision: decision.clone(),
-                                    view: view.clone(),
-                                    method,
-                                    url: target.clone(),
-                                    bypass: engine.intercept_bypass.clone(),
-                                });
+                                let decision = decision.clone();
+                                let view = view.clone();
+                                let bypass = engine.intercept_bypass.clone();
+                                let url = target.clone();
+                                callback(crate::engine::Held::new(method, target.clone(), move |d| match d {
+                                    crate::engine::HeldDecision::Forward => decision.use_(),
+                                    crate::engine::HeldDecision::Drop => decision.ignore(),
+                                    crate::engine::HeldDecision::ForwardTo(new_url) => {
+                                        if new_url == url {
+                                            decision.use_();
+                                        } else {
+                                            bypass.borrow_mut().insert(new_url.clone());
+                                            decision.ignore();
+                                            view.load_uri(&new_url);
+                                        }
+                                    }
+                                }));
                                 return true;
                             }
                         }
@@ -1030,34 +1040,6 @@ fn decide_policy(sink: &SinkSlot, view: &WebView, decision: &PolicyDecision, kin
             false
         }
         _ => false,
-    }
-}
-
-pub struct Held {
-    decision: PolicyDecision,
-    view: WebView,
-    pub method: String,
-    pub url: String,
-    bypass: Rc<RefCell<std::collections::HashSet<String>>>,
-}
-
-impl Held {
-    pub fn forward(self) {
-        self.decision.use_();
-    }
-
-    pub fn drop_request(self) {
-        self.decision.ignore();
-    }
-
-    pub fn forward_to(self, url: &str) {
-        if url == self.url || url.is_empty() {
-            self.decision.use_();
-        } else {
-            self.bypass.borrow_mut().insert(url.to_string());
-            self.decision.ignore();
-            self.view.load_uri(url);
-        }
     }
 }
 

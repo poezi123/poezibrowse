@@ -121,6 +121,8 @@ struct Inner {
     uri: RefCell<Option<String>>,
     loading: Cell<bool>,
     log_requests: Cell<bool>,
+    intercepting: Cell<bool>,
+    on_intercept: RefCell<Option<crate::engine::InterceptRoute>>,
     can_back: Cell<bool>,
     can_fwd: Cell<bool>,
     zoom: Cell<f64>,
@@ -140,6 +142,8 @@ impl Inner {
             uri: RefCell::new(None),
             loading: Cell::new(false),
             log_requests: Cell::new(false),
+            intercepting: Cell::new(false),
+            on_intercept: RefCell::new(None),
             can_back: Cell::new(false),
             can_fwd: Cell::new(false),
             zoom: Cell::new(zoom),
@@ -391,6 +395,7 @@ wrap_render_handler! {
 wrap_resource_request_handler! {
     pub struct PoeziResourceRequest {
         inner: Rc<Inner>,
+        is_navigation: bool,
     }
 
     impl ResourceRequestHandler {
@@ -399,19 +404,42 @@ wrap_resource_request_handler! {
             _browser: Option<&mut Browser>,
             _frame: Option<&mut Frame>,
             request: Option<&mut Request>,
-            _callback: Option<&mut Callback>,
+            callback: Option<&mut Callback>,
         ) -> ReturnValue {
+            let Some(request) = request else {
+                return ReturnValue::CONTINUE;
+            };
+            let url = userfree_str(request.url()).unwrap_or_default();
+            if url.is_empty() || url.starts_with("data:") || url.starts_with("blob:") {
+                return ReturnValue::CONTINUE;
+            }
+            let method = userfree_str(request.method()).unwrap_or_else(|| "GET".into());
             if self.inner.log_requests.get() {
-                if let Some(request) = request {
-                    let url = userfree_str(request.url()).unwrap_or_default();
-                    if !url.is_empty() && !url.starts_with("data:") && !url.starts_with("blob:") {
-                        let method = userfree_str(request.method()).unwrap_or_else(|| "GET".into());
-                        self.inner.sink.emit(PageEvent::Request(crate::intercept::RequestRecord {
-                            method,
-                            url,
-                            headers: Vec::new(),
-                        }));
-                    }
+                self.inner.sink.emit(PageEvent::Request(crate::intercept::RequestRecord {
+                    method: method.clone(),
+                    url: url.clone(),
+                    headers: Vec::new(),
+                }));
+            }
+            let is_web = url.starts_with("http://") || url.starts_with("https://");
+            if self.is_navigation && is_web && self.inner.intercepting.get() {
+                let route = self.inner.on_intercept.borrow().clone();
+                if let (Some(route), Some(callback)) = (route, callback) {
+                    let callback = callback.clone();
+                    let inner = self.inner.clone();
+                    route(crate::engine::Held::new(method, url, move |d| match d {
+                        crate::engine::HeldDecision::Forward => callback.cont(),
+                        crate::engine::HeldDecision::Drop => callback.cancel(),
+                        crate::engine::HeldDecision::ForwardTo(new_url) => {
+                            callback.cancel();
+                            if let Some(browser) = inner.browser.borrow().clone() {
+                                if let Some(frame) = browser.main_frame() {
+                                    frame.load_url(Some(&CefString::from(new_url.as_str())));
+                                }
+                            }
+                        }
+                    }));
+                    return ReturnValue::CONTINUE_ASYNC;
                 }
             }
             ReturnValue::CONTINUE
@@ -421,7 +449,7 @@ wrap_resource_request_handler! {
 
 wrap_request_handler! {
     pub struct PoeziRequest {
-        resource: ResourceRequestHandler,
+        inner: Rc<Inner>,
     }
 
     impl RequestHandler {
@@ -430,12 +458,12 @@ wrap_request_handler! {
             _browser: Option<&mut Browser>,
             _frame: Option<&mut Frame>,
             _request: Option<&mut Request>,
-            _is_navigation: ::std::os::raw::c_int,
+            is_navigation: ::std::os::raw::c_int,
             _is_download: ::std::os::raw::c_int,
             _request_initiator: Option<&CefString>,
             _disable_default_handling: Option<&mut ::std::os::raw::c_int>,
         ) -> Option<ResourceRequestHandler> {
-            Some(self.resource.clone())
+            Some(PoeziResourceRequest::new(self.inner.clone(), is_navigation != 0))
         }
     }
 }
@@ -477,7 +505,7 @@ fn spawn_browser(inner: &Rc<Inner>) {
     let load = PoeziLoad::new(inner.clone());
     let display = PoeziDisplay::new(inner.clone());
     let render = PoeziRender::new(inner.clone());
-    let request = PoeziRequest::new(PoeziResourceRequest::new(inner.clone()));
+    let request = PoeziRequest::new(inner.clone());
     let mut client = PoeziClient::new(life, load, display, render, request);
 
     let mut window_info = WindowInfo::default().set_as_windowless(0);
@@ -870,6 +898,14 @@ impl Page for ChromiumPage {
 
     fn set_request_logging(&self, on: bool) {
         self.inner.log_requests.set(on);
+    }
+
+    fn set_intercepting(&self, on: bool) {
+        self.inner.intercepting.set(on);
+    }
+
+    fn set_intercept_route(&self, route: crate::engine::InterceptRoute) {
+        self.inner.on_intercept.replace(Some(route));
     }
 
     fn close(&self) {

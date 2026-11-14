@@ -49,6 +49,7 @@ pub struct BrowserWindow {
     dock_stack: gtk::Stack,
     dock_toggles: Vec<(String, gtk::ToggleButton)>,
     intercept: RefCell<Option<Rc<crate::intercept::Intercept>>>,
+    intercept_route: RefCell<Option<crate::engine::InterceptRoute>>,
     terminal_loaded: Cell<bool>,
     tabs_box: gtk::Box,
     strip_scroll: gtk::ScrolledWindow,
@@ -372,6 +373,7 @@ impl BrowserWindow {
             dock_stack: dock_stack.clone(),
             dock_toggles,
             intercept: RefCell::new(None),
+            intercept_route: RefCell::new(None),
             terminal_loaded: Cell::new(false),
             tabs_box,
             strip_scroll,
@@ -607,16 +609,24 @@ impl BrowserWindow {
         self.syncing_toggles.set(false);
         if name == "intercept" && self.intercept.borrow().is_none() {
             let app = self.app.clone();
+            let toggle_weak = self.weak();
             let on_toggle: Rc<dyn Fn(bool)> = Rc::new(move |on| {
                 for engine in app.engines() {
                     engine.intercepting.set(on);
+                }
+                if let Some(w) = toggle_weak.upgrade() {
+                    for tab in w.tabs.borrow().iter() {
+                        if let Some(page) = tab.page.borrow().as_ref() {
+                            page.set_intercepting(on);
+                        }
+                    }
                 }
             });
             let intercept = crate::intercept::Intercept::new(on_toggle);
             self.dock_stack.add_named(&intercept.root, "intercept");
             *self.intercept.borrow_mut() = Some(intercept);
             let weak = self.weak();
-            let route: Rc<dyn Fn(crate::engine::webkit::Held)> = Rc::new(move |held| {
+            let route: crate::engine::InterceptRoute = Rc::new(move |held| {
                 if let Some(w) = weak.upgrade() {
                     if let Some(panel) = w.intercept.borrow().as_ref() {
                         if panel.is_intercepting() {
@@ -627,8 +637,14 @@ impl BrowserWindow {
                 }
                 held.forward();
             });
+            *self.intercept_route.borrow_mut() = Some(route.clone());
             for engine in self.app.engines() {
                 *engine.on_intercept.borrow_mut() = Some(route.clone());
+            }
+            for tab in self.tabs.borrow().iter() {
+                if let Some(page) = tab.page.borrow().as_ref() {
+                    page.set_intercept_route(route.clone());
+                }
             }
         }
         if name == "terminal" && !self.terminal_loaded.get() {
@@ -685,6 +701,7 @@ impl BrowserWindow {
         for tab in self.tabs.borrow().iter() {
             if let Some(page) = tab.page.borrow().as_ref() {
                 page.set_request_logging(false);
+                page.set_intercepting(false);
             }
         }
     }
@@ -1046,6 +1063,12 @@ impl BrowserWindow {
     fn connect_page(self: &Rc<Self>, tab: &Rc<Tab>, page: &dyn Page) {
         if self.dock.get_visible() && self.dock_stack.visible_child_name().as_deref() == Some("intercept") {
             page.set_request_logging(true);
+            if let Some(route) = self.intercept_route.borrow().as_ref() {
+                page.set_intercept_route(route.clone());
+            }
+            if let Some(panel) = self.intercept.borrow().as_ref() {
+                page.set_intercepting(panel.is_intercepting());
+            }
         }
         let w = self.weak();
         let t = Rc::downgrade(tab);
