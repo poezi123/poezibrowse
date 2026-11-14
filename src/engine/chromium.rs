@@ -46,8 +46,13 @@ wrap_app! {
                 Some(&CefString::from("ozone-platform")),
                 Some(&CefString::from("x11")),
             );
-            command_line.append_switch(Some(&CefString::from("disable-gpu")));
-            command_line.append_switch(Some(&CefString::from("disable-gpu-compositing")));
+            if std::env::var_os("POEZI_CEF_GPU").as_deref() == Some(std::ffi::OsStr::new("1")) {
+                command_line.append_switch(Some(&CefString::from("ignore-gpu-blocklist")));
+                command_line.append_switch(Some(&CefString::from("enable-gpu-rasterization")));
+            } else {
+                command_line.append_switch(Some(&CefString::from("disable-gpu")));
+                command_line.append_switch(Some(&CefString::from("disable-gpu-compositing")));
+            }
             command_line.append_switch(Some(&CefString::from("no-sandbox")));
         }
     }
