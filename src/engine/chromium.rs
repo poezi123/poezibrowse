@@ -120,6 +120,7 @@ struct Inner {
     title: RefCell<Option<String>>,
     uri: RefCell<Option<String>>,
     loading: Cell<bool>,
+    log_requests: Cell<bool>,
     can_back: Cell<bool>,
     can_fwd: Cell<bool>,
     zoom: Cell<f64>,
@@ -138,6 +139,7 @@ impl Inner {
             title: RefCell::new(None),
             uri: RefCell::new(None),
             loading: Cell::new(false),
+            log_requests: Cell::new(false),
             can_back: Cell::new(false),
             can_fwd: Cell::new(false),
             zoom: Cell::new(zoom),
@@ -160,6 +162,11 @@ impl Inner {
 
 fn cef_str(value: Option<&CefString>) -> Option<String> {
     value.and_then(|s| CefStringUtf8::from(s).as_str().map(str::to_owned))
+}
+
+fn userfree_str(value: CefStringUserfree) -> Option<String> {
+    let utf16 = CefStringUtf16::from(&value);
+    CefStringUtf8::from(&utf16).as_str().map(str::to_owned)
 }
 
 fn host_of(inner: &Rc<Inner>) -> Option<BrowserHost> {
@@ -381,12 +388,65 @@ wrap_render_handler! {
     }
 }
 
+wrap_resource_request_handler! {
+    pub struct PoeziResourceRequest {
+        inner: Rc<Inner>,
+    }
+
+    impl ResourceRequestHandler {
+        fn on_before_resource_load(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            request: Option<&mut Request>,
+            _callback: Option<&mut Callback>,
+        ) -> ReturnValue {
+            if self.inner.log_requests.get() {
+                if let Some(request) = request {
+                    let url = userfree_str(request.url()).unwrap_or_default();
+                    if !url.is_empty() && !url.starts_with("data:") && !url.starts_with("blob:") {
+                        let method = userfree_str(request.method()).unwrap_or_else(|| "GET".into());
+                        self.inner.sink.emit(PageEvent::Request(crate::intercept::RequestRecord {
+                            method,
+                            url,
+                            headers: Vec::new(),
+                        }));
+                    }
+                }
+            }
+            ReturnValue::CONTINUE
+        }
+    }
+}
+
+wrap_request_handler! {
+    pub struct PoeziRequest {
+        resource: ResourceRequestHandler,
+    }
+
+    impl RequestHandler {
+        fn resource_request_handler(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _request: Option<&mut Request>,
+            _is_navigation: ::std::os::raw::c_int,
+            _is_download: ::std::os::raw::c_int,
+            _request_initiator: Option<&CefString>,
+            _disable_default_handling: Option<&mut ::std::os::raw::c_int>,
+        ) -> Option<ResourceRequestHandler> {
+            Some(self.resource.clone())
+        }
+    }
+}
+
 wrap_client! {
     pub struct PoeziClient {
         life: LifeSpanHandler,
         load: LoadHandler,
         display: DisplayHandler,
         render: RenderHandler,
+        request: RequestHandler,
     }
 
     impl Client {
@@ -405,6 +465,10 @@ wrap_client! {
         fn render_handler(&self) -> Option<RenderHandler> {
             Some(self.render.clone())
         }
+
+        fn request_handler(&self) -> Option<RequestHandler> {
+            Some(self.request.clone())
+        }
     }
 }
 
@@ -413,7 +477,8 @@ fn spawn_browser(inner: &Rc<Inner>) {
     let load = PoeziLoad::new(inner.clone());
     let display = PoeziDisplay::new(inner.clone());
     let render = PoeziRender::new(inner.clone());
-    let mut client = PoeziClient::new(life, load, display, render);
+    let request = PoeziRequest::new(PoeziResourceRequest::new(inner.clone()));
+    let mut client = PoeziClient::new(life, load, display, render, request);
 
     let mut window_info = WindowInfo::default().set_as_windowless(0);
     window_info.runtime_style = RuntimeStyle::ALLOY;
@@ -801,6 +866,10 @@ impl Page for ChromiumPage {
                 host.show_dev_tools(None, None, None, None);
             }
         });
+    }
+
+    fn set_request_logging(&self, on: bool) {
+        self.inner.log_requests.set(on);
     }
 
     fn close(&self) {

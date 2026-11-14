@@ -74,6 +74,8 @@ pub trait Page {
     fn set_muted(&self, _muted: bool) {}
 
     fn find(&self, _text: &str, _backwards: bool) {}
+
+    fn set_request_logging(&self, _on: bool) {}
     fn print(&self, _parent: &gtk::Window) {}
     fn show_inspector(&self) {}
 

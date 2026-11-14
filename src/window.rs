@@ -641,6 +641,11 @@ impl BrowserWindow {
             for engine in self.app.engines() {
                 engine.log_requests.set(true);
             }
+            for tab in self.tabs.borrow().iter() {
+                if let Some(page) = tab.page.borrow().as_ref() {
+                    page.set_request_logging(true);
+                }
+            }
         } else {
             self.deactivate_intercept();
         }
@@ -676,6 +681,11 @@ impl BrowserWindow {
         for engine in self.app.engines() {
             engine.log_requests.set(false);
             engine.intercepting.set(false);
+        }
+        for tab in self.tabs.borrow().iter() {
+            if let Some(page) = tab.page.borrow().as_ref() {
+                page.set_request_logging(false);
+            }
         }
     }
 
@@ -1034,6 +1044,9 @@ impl BrowserWindow {
     }
 
     fn connect_page(self: &Rc<Self>, tab: &Rc<Tab>, page: &dyn Page) {
+        if self.dock.get_visible() && self.dock_stack.visible_child_name().as_deref() == Some("intercept") {
+            page.set_request_logging(true);
+        }
         let w = self.weak();
         let t = Rc::downgrade(tab);
         page.set_event_sink(Rc::new(move |event| {
