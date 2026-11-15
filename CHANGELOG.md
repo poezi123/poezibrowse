@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.9.2 – GPU rendering back on NVIDIA, YouTube crash fixed / GPU-Darstellung auf NVIDIA zurück, YouTube-Absturz behoben
+
+**English**
+
+- **Much faster on NVIDIA + Wayland:** 0.9.1 switched off WebKit's GPU compositing there, so pages were drawn on the CPU. It is back on (WebKitGTK 2.54 and newer). On an animation-heavy test page this is the difference between about 4 and 60 frames per second.
+- **YouTube crash fixed:** the tab crashed when a page started a view transition while GPU compositing was unavailable. That combination can no longer happen: with hardware acceleration switched off, view transitions are hidden from pages.
+- **Chromium tabs react faster:** the engine is now driven on demand instead of on a fixed 10 ms timer, only changed screen areas are copied, and the frame rate follows the monitor (up to 120 Hz).
+- The animated title bar no longer keeps the window's frame clock running at the monitor's full refresh rate.
+
+**Deutsch**
+
+- **Deutlich schneller auf NVIDIA + Wayland:** 0.9.1 hatte dort die GPU-Darstellung von WebKit abgeschaltet, Seiten wurden auf der CPU gezeichnet. Sie ist wieder an (WebKitGTK 2.54 und neuer). Auf einer Testseite mit vielen Animationen ist das der Unterschied zwischen etwa 4 und 60 Bildern pro Sekunde.
+- **YouTube-Absturz behoben:** Der Tab stürzte ab, wenn eine Seite eine View Transition startete, während die GPU-Darstellung nicht verfügbar war. Diese Kombination gibt es nicht mehr: Bei abgeschalteter Hardwarebeschleunigung werden View Transitions vor Seiten verborgen.
+- **Chromium-Tabs reagieren schneller:** Die Engine wird jetzt bei Bedarf angetrieben statt über einen festen 10-ms-Timer, es werden nur geänderte Bildbereiche kopiert, und die Bildrate folgt dem Monitor (bis 120 Hz).
+- Die animierte Titelleiste hält den Bildtakt des Fensters nicht mehr dauerhaft auf der vollen Bildwiederholrate des Monitors.
+
 ## v0.9.1 – second engine: Chromium / zweite Engine: Chromium
 
 **English**

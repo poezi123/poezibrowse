@@ -23,6 +23,58 @@ const EVENTFLAG_RIGHT_MOUSE_BUTTON: u32 = 1 << 6;
 
 thread_local! {
     static INITIALIZED: Cell<bool> = const { Cell::new(false) };
+    static PUMPING: Cell<bool> = const { Cell::new(false) };
+    static PUMP_AGAIN: Cell<bool> = const { Cell::new(false) };
+}
+
+static PUMP_PENDING: AtomicBool = AtomicBool::new(false);
+
+fn pump() {
+    PUMP_PENDING.store(false, Ordering::Release);
+    if !INITIALIZED.with(Cell::get) {
+        return;
+    }
+    if PUMPING.with(Cell::get) {
+        PUMP_AGAIN.with(|c| c.set(true));
+        return;
+    }
+    PUMPING.with(|c| c.set(true));
+    cef::do_message_loop_work();
+    PUMPING.with(|c| c.set(false));
+    if PUMP_AGAIN.with(|c| c.replace(false)) {
+        schedule_pump(0);
+    }
+}
+
+fn schedule_pump(delay_ms: i64) {
+    if delay_ms <= 0 {
+        if !PUMP_PENDING.swap(true, Ordering::AcqRel) {
+            glib::timeout_add_once(std::time::Duration::ZERO, pump);
+        }
+    } else {
+        glib::timeout_add_once(std::time::Duration::from_millis(delay_ms.min(50) as u64), pump);
+    }
+}
+
+fn target_frame_rate() -> i32 {
+    let Some(display) = gdk::Display::default() else { return 60 };
+    let mut best = 60;
+    for i in 0..display.n_monitors() {
+        if let Some(monitor) = display.monitor(i) {
+            best = best.max(monitor.refresh_rate() / 1000);
+        }
+    }
+    best.clamp(60, 120)
+}
+
+wrap_browser_process_handler! {
+    pub struct PoeziBrowserProcess {}
+
+    impl BrowserProcessHandler {
+        fn on_schedule_message_pump_work(&self, delay_ms: i64) {
+            schedule_pump(delay_ms);
+        }
+    }
 }
 
 fn cef_resource_dir() -> Option<std::path::PathBuf> {
@@ -55,6 +107,10 @@ wrap_app! {
     pub struct PoeziApp {}
 
     impl App {
+        fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
+            Some(PoeziBrowserProcess::new())
+        }
+
         fn on_before_command_line_processing(
             &self,
             _process_type: Option<&CefString>,
@@ -110,7 +166,7 @@ pub fn ensure_initialized() -> bool {
     let mut app = PoeziApp::new();
     let mut settings = cef::Settings::default();
     settings.no_sandbox = 1;
-    settings.external_message_pump = 0;
+    settings.external_message_pump = 1;
     settings.multi_threaded_message_loop = 0;
     settings.windowless_rendering_enabled = 1;
     if std::env::var_os("POEZI_CEF_LOG").is_some() {
@@ -136,8 +192,12 @@ pub fn ensure_initialized() -> bool {
         return false;
     }
     INITIALIZED.with(|i| i.set(true));
-    glib::timeout_add_local(std::time::Duration::from_millis(10), || {
-        cef::do_message_loop_work();
+    schedule_pump(0);
+    glib::timeout_add_local(std::time::Duration::from_millis(50), || {
+        if !INITIALIZED.with(Cell::get) {
+            return glib::ControlFlow::Break;
+        }
+        pump();
         glib::ControlFlow::Continue
     });
     true
@@ -219,6 +279,14 @@ impl Inner {
         if let Some(weak) = self.area.borrow().as_ref() {
             if let Some(area) = weak.upgrade() {
                 area.queue_draw();
+            }
+        }
+    }
+
+    fn queue_draw_area(&self, x: i32, y: i32, width: i32, height: i32) {
+        if let Some(weak) = self.area.borrow().as_ref() {
+            if let Some(area) = weak.upgrade() {
+                area.queue_draw_area(x, y, width, height);
             }
         }
     }
@@ -310,7 +378,7 @@ wrap_life_span_handler! {
                 }
             }
             if let Some(host) = browser.host() {
-                host.set_windowless_frame_rate(60);
+                host.set_windowless_frame_rate(target_frame_rate());
                 host.was_hidden(if self.inner.mapped.get() { 0 } else { 1 });
                 host.was_resized();
             }
@@ -454,7 +522,7 @@ wrap_render_handler! {
             &self,
             _browser: Option<&mut Browser>,
             type_: PaintElementType,
-            _dirty_rects: Option<&[Rect]>,
+            dirty_rects: Option<&[Rect]>,
             buffer: *const u8,
             width: ::std::os::raw::c_int,
             height: ::std::os::raw::c_int,
@@ -472,11 +540,33 @@ wrap_render_handler! {
             let reuse = cell
                 .as_ref()
                 .is_some_and(|s| s.width() == width && s.height() == height);
+            let rects: Vec<(i32, i32, i32, i32)> = dirty_rects
+                .unwrap_or(&[])
+                .iter()
+                .filter_map(|r| {
+                    let x = r.x.clamp(0, width);
+                    let y = r.y.clamp(0, height);
+                    let w = (r.x + r.width).clamp(0, width) - x;
+                    let h = (r.y + r.height).clamp(0, height) - y;
+                    (w > 0 && h > 0).then_some((x, y, w, h))
+                })
+                .collect();
+            let partial = reuse && !rects.is_empty();
             if reuse {
                 if let Some(surface) = cell.as_mut() {
                     surface.flush();
                     if let Ok(mut sdata) = surface.data() {
-                        sdata.copy_from_slice(src);
+                        if partial {
+                            for &(x, y, w, h) in &rects {
+                                for row in y..y + h {
+                                    let start = (row * stride + x * 4) as usize;
+                                    let end = start + (w * 4) as usize;
+                                    sdata[start..end].copy_from_slice(&src[start..end]);
+                                }
+                            }
+                        } else {
+                            sdata.copy_from_slice(src);
+                        }
                     }
                     surface.mark_dirty();
                 }
@@ -489,7 +579,13 @@ wrap_render_handler! {
                 }
             }
             drop(cell);
-            self.inner.queue_draw();
+            if partial {
+                for (x, y, w, h) in rects {
+                    self.inner.queue_draw_area(x, y, w, h);
+                }
+            } else {
+                self.inner.queue_draw();
+            }
         }
     }
 }

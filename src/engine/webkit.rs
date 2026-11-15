@@ -47,6 +47,7 @@ pub struct WebKitEngine {
     managers: RefCell<Vec<glib::WeakRef<UserContentManager>>>,
     tor_port: u16,
     fingerprint_script: Option<webkit2gtk::UserScript>,
+    view_transition_guard: Option<webkit2gtk::UserScript>,
     pub log_requests: std::cell::Cell<bool>,
     pub intercepting: std::cell::Cell<bool>,
     pub on_intercept: RefCell<Option<crate::engine::InterceptRoute>>,
@@ -158,7 +159,16 @@ impl WebKitEngine {
         } else {
             HardwareAccelerationPolicy::Never
         });
-        set_feature(&settings, "PDFJSViewerEnabled", true);
+        set_feature(&settings, "PDFJSViewer", true);
+        let view_transition_guard = (!config.hardware_acceleration || crate::system::dmabuf_disabled()).then(|| {
+            webkit2gtk::UserScript::new(
+                "(() => { try { delete Document.prototype.startViewTransition; } catch (e) {} })();",
+                webkit2gtk::UserContentInjectedFrames::AllFrames,
+                webkit2gtk::UserScriptInjectionTime::Start,
+                &[],
+                &[],
+            )
+        });
         let user_agent = config.user_agent_for(mode);
         if let Some((ua, _)) = &user_agent {
             settings.set_user_agent(Some(ua));
@@ -225,6 +235,7 @@ impl WebKitEngine {
             managers: RefCell::new(Vec::new()),
             tor_port,
             fingerprint_script,
+            view_transition_guard,
             log_requests: std::cell::Cell::new(false),
             intercepting: std::cell::Cell::new(false),
             on_intercept: RefCell::new(None),
@@ -405,6 +416,9 @@ impl WebKitEngine {
     fn new_content_manager(&self) -> UserContentManager {
         let ucm = UserContentManager::new();
         webkit2gtk::UserContentManagerExt::add_script(&ucm, &self.media_fix);
+        if let Some(script) = &self.view_transition_guard {
+            webkit2gtk::UserContentManagerExt::add_script(&ucm, script);
+        }
         if let Some(script) = &self.fingerprint_script {
             webkit2gtk::UserContentManagerExt::add_script(&ucm, script);
         }
