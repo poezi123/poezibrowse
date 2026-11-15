@@ -61,13 +61,25 @@ wrap_app! {
             command_line: Option<&mut CommandLine>,
         ) {
             let Some(command_line) = command_line else { return };
+            let ozone = if std::env::var_os("WAYLAND_DISPLAY").is_some() { "wayland" } else { "x11" };
             command_line.append_switch_with_value(
                 Some(&CefString::from("ozone-platform")),
-                Some(&CefString::from("x11")),
+                Some(&CefString::from(ozone)),
             );
+            command_line.append_switch(Some(&CefString::from("enable-smooth-scrolling")));
             if std::env::var_os("POEZI_CEF_GPU").as_deref() == Some(std::ffi::OsStr::new("1")) {
                 command_line.append_switch(Some(&CefString::from("ignore-gpu-blocklist")));
                 command_line.append_switch(Some(&CefString::from("enable-gpu-rasterization")));
+                if std::path::Path::new("/proc/driver/nvidia").exists() {
+                    command_line.append_switch_with_value(
+                        Some(&CefString::from("use-angle")),
+                        Some(&CefString::from("vulkan")),
+                    );
+                    command_line.append_switch_with_value(
+                        Some(&CefString::from("enable-features")),
+                        Some(&CefString::from("Vulkan,DefaultANGLEVulkan,VulkanFromANGLE")),
+                    );
+                }
             } else {
                 command_line.append_switch(Some(&CefString::from("disable-gpu")));
                 command_line.append_switch(Some(&CefString::from("disable-gpu-compositing")));
@@ -485,7 +497,7 @@ wrap_render_handler! {
 wrap_resource_request_handler! {
     pub struct PoeziResourceRequest {
         bridge: Arc<Bridge>,
-        is_navigation: bool,
+        _is_navigation: bool,
     }
 
     impl ResourceRequestHandler {
@@ -513,7 +525,7 @@ wrap_resource_request_handler! {
                 }
             }
             let is_web = url.starts_with("http://") || url.starts_with("https://");
-            if self.is_navigation && is_web && self.bridge.intercepting.load(Ordering::Relaxed) {
+            if is_web && self.bridge.intercepting.load(Ordering::Relaxed) {
                 if let Some(callback) = callback {
                     let callback = callback.clone();
                     let browser = browser.map(|b| b.clone());
@@ -663,6 +675,8 @@ fn vk_from_keyval(key: &gdk::keys::Key) -> i32 {
 pub struct ChromiumPage {
     area: gtk::DrawingArea,
     inner: Rc<Inner>,
+    find_last: RefCell<String>,
+    muted: std::cell::Cell<bool>,
 }
 
 impl ChromiumPage {
@@ -799,6 +813,7 @@ impl ChromiumPage {
         });
 
         let scroll_inner = inner.clone();
+        let scroll_accum = std::rc::Rc::new(std::cell::Cell::new((0.0f64, 0.0f64)));
         area.connect_scroll_event(move |_area, ev| {
             if let Some(host) = host_of(&scroll_inner) {
                 let (x, y) = ev.position();
@@ -808,7 +823,9 @@ impl ChromiumPage {
                     modifiers: mods_from_state(ev.state()),
                 };
                 let (mut dx, mut dy) = ev.delta();
+                let mut step = 40.0;
                 if dx == 0.0 && dy == 0.0 {
+                    step = 100.0;
                     match ev.direction() {
                         gdk::ScrollDirection::Up => dy = -1.0,
                         gdk::ScrollDirection::Down => dy = 1.0,
@@ -817,7 +834,15 @@ impl ChromiumPage {
                         _ => {}
                     }
                 }
-                host.send_mouse_wheel_event(Some(&event), (-dx * 100.0) as i32, (-dy * 100.0) as i32);
+                let (ax, ay) = scroll_accum.get();
+                let tx = ax - dx * step;
+                let ty = ay - dy * step;
+                let ix = tx.trunc();
+                let iy = ty.trunc();
+                scroll_accum.set((tx - ix, ty - iy));
+                if ix != 0.0 || iy != 0.0 {
+                    host.send_mouse_wheel_event(Some(&event), ix as i32, iy as i32);
+                }
             }
             glib::Propagation::Stop
         });
@@ -849,7 +874,7 @@ impl ChromiumPage {
         });
 
         spawn_browser(&inner);
-        Some(Box::new(ChromiumPage { area, inner }))
+        Some(Box::new(ChromiumPage { area, inner, find_last: RefCell::new(String::new()), muted: std::cell::Cell::new(false) }))
     }
 
     fn with_browser<R>(&self, f: impl FnOnce(&Browser) -> R) -> Option<R> {
@@ -987,6 +1012,39 @@ impl Page for ChromiumPage {
         self.with_browser(|browser| {
             if let Some(host) = browser.host() {
                 host.show_dev_tools(None, None, None, None);
+            }
+        });
+    }
+
+    fn find(&self, text: &str, backwards: bool) {
+        self.with_browser(|browser| {
+            if let Some(host) = browser.host() {
+                if text.is_empty() {
+                    host.stop_finding(1);
+                    self.find_last.replace(String::new());
+                } else {
+                    let find_next = *self.find_last.borrow() == text;
+                    host.find(
+                        Some(&CefString::from(text)),
+                        i32::from(!backwards),
+                        0,
+                        i32::from(find_next),
+                    );
+                    self.find_last.replace(text.to_string());
+                }
+            }
+        });
+    }
+
+    fn is_muted(&self) -> bool {
+        self.muted.get()
+    }
+
+    fn set_muted(&self, muted: bool) {
+        self.muted.set(muted);
+        self.with_browser(|browser| {
+            if let Some(host) = browser.host() {
+                host.set_audio_muted(i32::from(muted));
             }
         });
     }
