@@ -1,7 +1,64 @@
+#[cfg(feature = "cef")]
+pub mod chromium;
 pub mod webkit;
 
 use std::cell::RefCell;
 use std::rc::Rc;
+
+pub enum HeldDecision {
+    Forward,
+    Drop,
+    ForwardTo(String),
+}
+
+pub struct Held {
+    pub method: String,
+    pub url: String,
+    action: Option<Box<dyn FnOnce(HeldDecision)>>,
+}
+
+impl Held {
+    pub fn new(method: String, url: String, action: impl FnOnce(HeldDecision) + 'static) -> Self {
+        Held {
+            method,
+            url,
+            action: Some(Box::new(action)),
+        }
+    }
+
+    fn dispatch(mut self, decision: HeldDecision) {
+        if let Some(action) = self.action.take() {
+            action(decision);
+        }
+    }
+
+    pub fn forward(self) {
+        self.dispatch(HeldDecision::Forward);
+    }
+
+    pub fn drop_request(self) {
+        self.dispatch(HeldDecision::Drop);
+    }
+
+    pub fn forward_to(self, url: &str) {
+        if url.is_empty() || url == self.url {
+            self.dispatch(HeldDecision::Forward);
+        } else {
+            let url = url.to_string();
+            self.dispatch(HeldDecision::ForwardTo(url));
+        }
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        if let Some(action) = self.action.take() {
+            action(HeldDecision::Forward);
+        }
+    }
+}
+
+pub type InterceptRoute = Rc<dyn Fn(Held)>;
 
 pub enum PageEvent {
     TitleChanged,
@@ -72,6 +129,12 @@ pub trait Page {
     fn set_muted(&self, _muted: bool) {}
 
     fn find(&self, _text: &str, _backwards: bool) {}
+
+    fn set_request_logging(&self, _on: bool) {}
+
+    fn set_intercepting(&self, _on: bool) {}
+
+    fn set_intercept_route(&self, _route: InterceptRoute) {}
     fn print(&self, _parent: &gtk::Window) {}
     fn show_inspector(&self) {}
 

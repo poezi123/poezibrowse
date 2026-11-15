@@ -19,6 +19,16 @@ use crate::storage::Storage;
 use crate::passwords::PasswordManager;
 use crate::{memory, pages};
 
+#[cfg(feature = "cef")]
+fn is_web_uri(uri: &str) -> bool {
+    let u = uri.trim_start();
+    u.starts_with("http://")
+        || u.starts_with("https://")
+        || u.starts_with("data:")
+        || u.starts_with("file://")
+        || u.starts_with("view-source:")
+}
+
 pub struct App {
     pub gtk_app: gtk::Application,
     pub config: RefCell<Config>,
@@ -359,9 +369,18 @@ impl App {
     }
 
     pub fn create_page(&self, engine: EngineKind, mode: Mode, uri: &str) -> Box<dyn Page> {
-        match engine {
-            _ => Box::new(PageHandle(self.webkit_engine(mode).create_page(None, uri))),
+        #[cfg(feature = "cef")]
+        if engine == EngineKind::Chromium && mode == Mode::Normal && is_web_uri(uri) {
+            let (zoom, accelerated) = {
+                let c = self.config.borrow();
+                (c.default_zoom, c.hardware_acceleration)
+            };
+            if let Some(page) = crate::engine::chromium::ChromiumPage::new(uri, zoom, accelerated) {
+                return page;
+            }
         }
+        let _ = engine;
+        Box::new(PageHandle(self.webkit_engine(mode).create_page(None, uri)))
     }
 
     pub fn homepage(&self, mode: Mode) -> String {

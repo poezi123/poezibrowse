@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.9.0 – second engine: Chromium / zweite Engine: Chromium
+
+**English**
+
+- **Second browser engine, switchable in the settings:** besides WebKit you can now pick **Chromium** (Blink, via CEF) under **Settings → Engine for new tabs**. It is meant for pages WebKit struggles with (some captchas, ChatGPT voice chat). The change takes effect after a restart; internal pages and private/Tor tabs stay on WebKit.
+- Chromium tabs render offscreen and are composited into the window. **Hardware acceleration** (Settings) uses the GPU for smoother scrolling; turn it off if pages stay black on your graphics driver, then Chromium renders in software.
+- **PoeziIntercept works in Chromium tabs too:** the request log shows every request, and the intercept mode can hold navigations and forward, drop or redirect them – the same panel as for WebKit.
+- Chromium is bundled in the `.deb` and `.tar.gz`; the Arch package uses the system `cef`.
+
+**Deutsch**
+
+- **Zweite Browser-Engine, in den Einstellungen umschaltbar:** Neben WebKit gibt es jetzt **Chromium** (Blink, über CEF) unter **Einstellungen → Engine für neue Tabs**. Gedacht für Seiten, mit denen WebKit Probleme hat (manche Captchas, ChatGPT-Sprachchat). Der Wechsel wirkt nach einem Neustart; interne Seiten sowie private und Tor-Tabs bleiben auf WebKit.
+- Chromium-Tabs rendern offscreen und werden ins Fenster gezeichnet. **Hardwarebeschleunigung** (Einstellungen) nutzt die GPU für flüssigeres Scrollen; bei schwarzen Seiten auf deinem Grafiktreiber abschalten, dann rendert Chromium per Software.
+- **PoeziIntercept funktioniert auch in Chromium-Tabs:** Der Verlauf zeigt alle Anfragen, und der Intercept-Modus kann Navigationen anhalten und weiterleiten, verwerfen oder umleiten – dasselbe Panel wie bei WebKit.
+- Chromium ist im `.deb` und `.tar.gz` enthalten; das Arch-Paket nutzt das System-`cef`.
+
 ## v0.8.2 – captchas / Captchas
 
 **English**

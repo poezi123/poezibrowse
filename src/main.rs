@@ -23,7 +23,21 @@ use gtk::gio;
 use gtk::prelude::*;
 
 fn main() -> gtk::glib::ExitCode {
+    #[cfg(feature = "cef")]
+    if let Some(code) = engine::chromium::execute_subprocess() {
+        std::process::exit(code);
+    }
     let startup_config = config::Config::load();
+    #[cfg(feature = "cef")]
+    if startup_config.engine == config::EngineKind::Chromium && std::env::var_os("GDK_BACKEND").is_none() {
+        unsafe { std::env::set_var("GDK_BACKEND", "x11") };
+    }
+    #[cfg(feature = "cef")]
+    if std::env::var_os("POEZI_CEF_GPU").is_none() {
+        unsafe {
+            std::env::set_var("POEZI_CEF_GPU", if startup_config.hardware_acceleration { "1" } else { "0" });
+        }
+    }
     let nvidia = system::nvidia();
     if nvidia && std::env::var_os("__NV_DISABLE_EXPLICIT_SYNC").is_none() {
         unsafe { std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1") };
@@ -136,6 +150,8 @@ fn main() -> gtk::glib::ExitCode {
     }
     let code = gtk_app.run();
     drop(app);
+    #[cfg(feature = "cef")]
+    engine::chromium::shutdown();
     code
 }
 

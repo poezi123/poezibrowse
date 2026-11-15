@@ -11,21 +11,21 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub enum EngineKind {
     #[default]
     Webkit,
-    Servo,
+    Chromium,
 }
 
 impl EngineKind {
     pub fn label(self) -> &'static str {
         match self {
             EngineKind::Webkit => "WebKit",
-            EngineKind::Servo => "Servo",
+            EngineKind::Chromium => "Chromium",
         }
     }
 
     pub fn available(self) -> bool {
         match self {
             EngineKind::Webkit => true,
-            EngineKind::Servo => false,
+            EngineKind::Chromium => cfg!(feature = "cef"),
         }
     }
 }
