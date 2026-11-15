@@ -29,10 +29,6 @@ fn main() -> gtk::glib::ExitCode {
     }
     let startup_config = config::Config::load();
     #[cfg(feature = "cef")]
-    if startup_config.engine == config::EngineKind::Chromium && std::env::var_os("GDK_BACKEND").is_none() {
-        unsafe { std::env::set_var("GDK_BACKEND", "x11") };
-    }
-    #[cfg(feature = "cef")]
     if std::env::var_os("POEZI_CEF_GPU").is_none() {
         unsafe {
             std::env::set_var("POEZI_CEF_GPU", if startup_config.hardware_acceleration { "1" } else { "0" });
@@ -42,7 +38,7 @@ fn main() -> gtk::glib::ExitCode {
     if nvidia && std::env::var_os("__NV_DISABLE_EXPLICIT_SYNC").is_none() {
         unsafe { std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1") };
     }
-    if nvidia && system::wayland_session() && !system::webkit_at_least(2, 54) && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+    if nvidia && system::wayland_session() && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
         unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
     }
     {

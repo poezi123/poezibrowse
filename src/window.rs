@@ -82,6 +82,7 @@ impl BrowserWindow {
 
         let header = gtk::HeaderBar::new();
         header.set_show_close_button(true);
+        header.set_decoration_layout(Some("close,minimize,maximize:"));
 
         let nav = gtk::Box::new(Orientation::Horizontal, 0);
         nav.style_context().add_class("linked");
