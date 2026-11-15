@@ -1,5 +1,8 @@
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use cef::rc::Rc as _;
 use cef::*;
@@ -114,14 +117,39 @@ pub fn shutdown() {
     }
 }
 
+enum BridgeMsg {
+    Log { method: String, url: String },
+    Hold {
+        method: String,
+        url: String,
+        callback: Callback,
+        browser: Option<Browser>,
+    },
+}
+
+struct Bridge {
+    log_requests: AtomicBool,
+    intercepting: AtomicBool,
+    queue: Mutex<VecDeque<BridgeMsg>>,
+}
+
+impl Bridge {
+    fn new() -> Self {
+        Bridge {
+            log_requests: AtomicBool::new(false),
+            intercepting: AtomicBool::new(false),
+            queue: Mutex::new(VecDeque::new()),
+        }
+    }
+}
+
 struct Inner {
     sink: SinkSlot,
     browser: RefCell<Option<Browser>>,
     title: RefCell<Option<String>>,
     uri: RefCell<Option<String>>,
     loading: Cell<bool>,
-    log_requests: Cell<bool>,
-    intercepting: Cell<bool>,
+    bridge: Arc<Bridge>,
     on_intercept: RefCell<Option<crate::engine::InterceptRoute>>,
     can_back: Cell<bool>,
     can_fwd: Cell<bool>,
@@ -141,8 +169,7 @@ impl Inner {
             title: RefCell::new(None),
             uri: RefCell::new(None),
             loading: Cell::new(false),
-            log_requests: Cell::new(false),
-            intercepting: Cell::new(false),
+            bridge: Arc::new(Bridge::new()),
             on_intercept: RefCell::new(None),
             can_back: Cell::new(false),
             can_fwd: Cell::new(false),
@@ -176,6 +203,48 @@ fn userfree_str(value: CefStringUserfree) -> Option<String> {
 fn host_of(inner: &Rc<Inner>) -> Option<BrowserHost> {
     let browser = inner.browser.borrow().clone();
     browser.and_then(|b| b.host())
+}
+
+fn drain_bridge(inner: &Rc<Inner>) {
+    let msgs: Vec<BridgeMsg> = match inner.bridge.queue.lock() {
+        Ok(mut q) => q.drain(..).collect(),
+        Err(_) => return,
+    };
+    for msg in msgs {
+        match msg {
+            BridgeMsg::Log { method, url } => {
+                inner.sink.emit(PageEvent::Request(crate::intercept::RequestRecord {
+                    method,
+                    url,
+                    headers: Vec::new(),
+                }));
+            }
+            BridgeMsg::Hold {
+                method,
+                url,
+                callback,
+                browser,
+            } => {
+                let route = inner.on_intercept.borrow().clone();
+                let held = crate::engine::Held::new(method, url, move |d| match d {
+                    crate::engine::HeldDecision::Forward => callback.cont(),
+                    crate::engine::HeldDecision::Drop => callback.cancel(),
+                    crate::engine::HeldDecision::ForwardTo(new_url) => {
+                        callback.cancel();
+                        if let Some(browser) = browser {
+                            if let Some(frame) = browser.main_frame() {
+                                frame.load_url(Some(&CefString::from(new_url.as_str())));
+                            }
+                        }
+                    }
+                });
+                match route {
+                    Some(route) => route(held),
+                    None => held.forward(),
+                }
+            }
+        }
+    }
 }
 
 fn try_load(inner: &Rc<Inner>) {
@@ -394,14 +463,14 @@ wrap_render_handler! {
 
 wrap_resource_request_handler! {
     pub struct PoeziResourceRequest {
-        inner: Rc<Inner>,
+        bridge: Arc<Bridge>,
         is_navigation: bool,
     }
 
     impl ResourceRequestHandler {
         fn on_before_resource_load(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             _frame: Option<&mut Frame>,
             request: Option<&mut Request>,
             callback: Option<&mut Callback>,
@@ -414,31 +483,27 @@ wrap_resource_request_handler! {
                 return ReturnValue::CONTINUE;
             }
             let method = userfree_str(request.method()).unwrap_or_else(|| "GET".into());
-            if self.inner.log_requests.get() {
-                self.inner.sink.emit(PageEvent::Request(crate::intercept::RequestRecord {
-                    method: method.clone(),
-                    url: url.clone(),
-                    headers: Vec::new(),
-                }));
+            if self.bridge.log_requests.load(Ordering::Relaxed) {
+                if let Ok(mut q) = self.bridge.queue.lock() {
+                    q.push_back(BridgeMsg::Log {
+                        method: method.clone(),
+                        url: url.clone(),
+                    });
+                }
             }
             let is_web = url.starts_with("http://") || url.starts_with("https://");
-            if self.is_navigation && is_web && self.inner.intercepting.get() {
-                let route = self.inner.on_intercept.borrow().clone();
-                if let (Some(route), Some(callback)) = (route, callback) {
+            if self.is_navigation && is_web && self.bridge.intercepting.load(Ordering::Relaxed) {
+                if let Some(callback) = callback {
                     let callback = callback.clone();
-                    let inner = self.inner.clone();
-                    route(crate::engine::Held::new(method, url, move |d| match d {
-                        crate::engine::HeldDecision::Forward => callback.cont(),
-                        crate::engine::HeldDecision::Drop => callback.cancel(),
-                        crate::engine::HeldDecision::ForwardTo(new_url) => {
-                            callback.cancel();
-                            if let Some(browser) = inner.browser.borrow().clone() {
-                                if let Some(frame) = browser.main_frame() {
-                                    frame.load_url(Some(&CefString::from(new_url.as_str())));
-                                }
-                            }
-                        }
-                    }));
+                    let browser = browser.map(|b| b.clone());
+                    if let Ok(mut q) = self.bridge.queue.lock() {
+                        q.push_back(BridgeMsg::Hold {
+                            method,
+                            url,
+                            callback,
+                            browser,
+                        });
+                    }
                     return ReturnValue::CONTINUE_ASYNC;
                 }
             }
@@ -449,7 +514,7 @@ wrap_resource_request_handler! {
 
 wrap_request_handler! {
     pub struct PoeziRequest {
-        inner: Rc<Inner>,
+        bridge: Arc<Bridge>,
     }
 
     impl RequestHandler {
@@ -463,7 +528,7 @@ wrap_request_handler! {
             _request_initiator: Option<&CefString>,
             _disable_default_handling: Option<&mut ::std::os::raw::c_int>,
         ) -> Option<ResourceRequestHandler> {
-            Some(PoeziResourceRequest::new(self.inner.clone(), is_navigation != 0))
+            Some(PoeziResourceRequest::new(self.bridge.clone(), is_navigation != 0))
         }
     }
 }
@@ -505,7 +570,7 @@ fn spawn_browser(inner: &Rc<Inner>) {
     let load = PoeziLoad::new(inner.clone());
     let display = PoeziDisplay::new(inner.clone());
     let render = PoeziRender::new(inner.clone());
-    let request = PoeziRequest::new(inner.clone());
+    let request = PoeziRequest::new(inner.bridge.clone());
     let mut client = PoeziClient::new(life, load, display, render, request);
 
     let mut window_info = WindowInfo::default().set_as_windowless(0);
@@ -588,6 +653,15 @@ impl ChromiumPage {
         if !uri.is_empty() {
             inner.pending_uri.replace(Some(uri.to_string()));
         }
+
+        let drain_weak = Rc::downgrade(&inner);
+        glib::timeout_add_local(std::time::Duration::from_millis(15), move || match drain_weak.upgrade() {
+            Some(inner) => {
+                drain_bridge(&inner);
+                glib::ControlFlow::Continue
+            }
+            None => glib::ControlFlow::Break,
+        });
 
         let area = gtk::DrawingArea::new();
         area.set_hexpand(true);
@@ -897,11 +971,11 @@ impl Page for ChromiumPage {
     }
 
     fn set_request_logging(&self, on: bool) {
-        self.inner.log_requests.set(on);
+        self.inner.bridge.log_requests.store(on, Ordering::Relaxed);
     }
 
     fn set_intercepting(&self, on: bool) {
-        self.inner.intercepting.set(on);
+        self.inner.bridge.intercepting.store(on, Ordering::Relaxed);
     }
 
     fn set_intercept_route(&self, route: crate::engine::InterceptRoute) {
