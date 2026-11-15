@@ -7,13 +7,33 @@ version="$(sed -nE 's/^version = "([0-9.]+)"/\1/p' "$root/Cargo.toml" | head -1)
 appid=io.github.poezi123.PoeziBrowse
 binary="$root/target/release/poezibrowse"
 
-(cd "$root" && cargo build --release --locked)
+(cd "$root" && cargo build --release --locked --features cef)
+
+cefdir="$(find "$root/target/release/build" -maxdepth 3 -type d -name cef_linux_x86_64 | head -1)"
+if [[ -z "$cefdir" || ! -f "$cefdir/libcef.so" ]]; then
+  echo "CEF-Distribution nicht gefunden – erst 'cargo build --release --features cef' laufen lassen" >&2
+  exit 1
+fi
 
 mkdir -p "$target"
 target="$(cd "$target" && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 "$root/packaging/tor/fetch-lyrebird.sh" "$work/lyrebird"
+
+stage_cef() {
+  local libdir="$1/usr/lib/poezibrowse"
+  install -Dm755 "$cefdir/libcef.so" "$libdir/libcef.so"
+  strip --strip-unneeded "$libdir/libcef.so" 2>/dev/null || true
+  install -Dm755 "$cefdir/libvk_swiftshader.so" "$libdir/libvk_swiftshader.so" 2>/dev/null || true
+  strip --strip-unneeded "$libdir/libvk_swiftshader.so" 2>/dev/null || true
+  install -Dm4755 "$cefdir/chrome-sandbox" "$libdir/chrome-sandbox" 2>/dev/null || true
+  for f in icudtl.dat v8_context_snapshot.bin snapshot_blob.bin chrome_100_percent.pak chrome_200_percent.pak resources.pak vk_swiftshader_icd.json; do
+    [[ -f "$cefdir/$f" ]] && install -Dm644 "$cefdir/$f" "$libdir/$f"
+  done
+  install -d "$libdir/locales"
+  cp -a "$cefdir/locales/." "$libdir/locales/" 2>/dev/null || true
+}
 
 stage() {
   local dest="$1"
@@ -24,6 +44,7 @@ stage() {
   done
   install -Dm644 "$root/packaging/linux/icon.svg" "$dest/usr/share/icons/hicolor/scalable/apps/$appid.svg"
   install -Dm755 "$work/lyrebird/lyrebird" "$dest/usr/lib/poezibrowse/lyrebird"
+  stage_cef "$dest"
 }
 
 deb="$work/deb"
@@ -38,7 +59,7 @@ Version: $version
 Architecture: amd64
 Maintainer: poezi123 <poezi123@users.noreply.github.com>
 Installed-Size: $(du -sk --exclude=DEBIAN "$deb" | cut -f1)
-Depends: libc6 (>= 2.39), libwebkit2gtk-4.1-0 (>= 2.40), libgtk-3-0t64 | libgtk-3-0, libsqlite3-0, libglib2.0-0t64 | libglib2.0-0, glib-networking, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-libav, libvte-2.91-0
+Depends: libc6 (>= 2.39), libwebkit2gtk-4.1-0 (>= 2.40), libgtk-3-0t64 | libgtk-3-0, libsqlite3-0, libglib2.0-0t64 | libglib2.0-0, glib-networking, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-libav, libvte-2.91-0, libnss3, libnspr4, libcups2 | libcups2t64, libdrm2, libgbm1, libasound2 | libasound2t64, libxkbcommon0, libxcomposite1, libxdamage1, libxrandr2, libxfixes3, libatspi2.0-0 | libatspi2.0-0t64, libxcb1, libxkbfile1
 Recommends: bubblewrap, xdg-dbus-proxy, gstreamer1.0-plugins-bad, tor
 Suggests: tor, keepassxc
 Section: web

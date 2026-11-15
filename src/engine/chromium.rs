@@ -25,6 +25,22 @@ thread_local! {
     static INITIALIZED: Cell<bool> = const { Cell::new(false) };
 }
 
+fn cef_resource_dir() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let exe_dir = exe.parent()?;
+    let candidates = [
+        exe_dir.to_path_buf(),
+        exe_dir.join("../lib/poezibrowse"),
+        std::path::PathBuf::from("/usr/lib/cef"),
+    ];
+    for dir in candidates {
+        if dir.join("icudtl.dat").is_file() {
+            return dir.canonicalize().ok();
+        }
+    }
+    None
+}
+
 fn cache_dir() -> Option<String> {
     let dir = dirs::cache_dir()?.join("poezibrowse").join("chromium");
     std::fs::create_dir_all(&dir).ok()?;
@@ -92,6 +108,11 @@ pub fn ensure_initialized() -> bool {
     if let Some(dir) = cache_dir() {
         settings.root_cache_path = CefString::from(dir.as_str());
         settings.cache_path = CefString::from(dir.as_str());
+    }
+    if let Some(dir) = cef_resource_dir() {
+        let dir = dir.to_string_lossy().into_owned();
+        settings.resources_dir_path = CefString::from(dir.as_str());
+        settings.locales_dir_path = CefString::from(format!("{dir}/locales").as_str());
     }
     let rc = cef::initialize(
         Some(args.as_main_args()),
