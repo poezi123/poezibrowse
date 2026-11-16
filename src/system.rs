@@ -188,6 +188,22 @@ pub fn wayland_session() -> bool {
     !x11_forced && (std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var("XDG_SESSION_TYPE").is_ok_and(|t| t == "wayland"))
 }
 
+pub fn gl_usable() -> bool {
+    use gtk::prelude::*;
+    thread_local! {
+        static USABLE: std::cell::OnceCell<bool> = const { std::cell::OnceCell::new() };
+    }
+    USABLE.with(|cell| {
+        *cell.get_or_init(|| {
+            let probe = gtk::Window::new(gtk::WindowType::Toplevel);
+            probe.realize();
+            let usable = probe.window().and_then(|w| w.create_gl_context().ok()).is_some_and(|context| context.realize().is_ok());
+            unsafe { probe.destroy() };
+            usable
+        })
+    })
+}
+
 pub fn dmabuf_disabled() -> bool {
     std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_ok_and(|v| v != "0")
 }

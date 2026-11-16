@@ -126,16 +126,6 @@ wrap_app! {
             if std::env::var_os("POEZI_CEF_GPU").as_deref() == Some(std::ffi::OsStr::new("1")) {
                 command_line.append_switch(Some(&CefString::from("ignore-gpu-blocklist")));
                 command_line.append_switch(Some(&CefString::from("enable-gpu-rasterization")));
-                if std::path::Path::new("/proc/driver/nvidia").exists() {
-                    command_line.append_switch_with_value(
-                        Some(&CefString::from("use-angle")),
-                        Some(&CefString::from("vulkan")),
-                    );
-                    command_line.append_switch_with_value(
-                        Some(&CefString::from("enable-features")),
-                        Some(&CefString::from("Vulkan,DefaultANGLEVulkan,VulkanFromANGLE")),
-                    );
-                }
             } else {
                 command_line.append_switch(Some(&CefString::from("disable-gpu")));
                 command_line.append_switch(Some(&CefString::from("disable-gpu-compositing")));
