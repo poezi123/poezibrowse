@@ -613,7 +613,7 @@ impl BrowserWindow {
             let toggle_weak = self.weak();
             let on_toggle: Rc<dyn Fn(bool)> = Rc::new(move |on| {
                 for engine in app.engines() {
-                    engine.intercepting.set(on);
+                    engine.set_intercepting(on);
                 }
                 if let Some(w) = toggle_weak.upgrade() {
                     for tab in w.tabs.borrow().iter() {
@@ -697,7 +697,7 @@ impl BrowserWindow {
         }
         for engine in self.app.engines() {
             engine.log_requests.set(false);
-            engine.intercepting.set(false);
+            engine.set_intercepting(false);
         }
         for tab in self.tabs.borrow().iter() {
             if let Some(page) = tab.page.borrow().as_ref() {

@@ -174,6 +174,11 @@ pub fn tls_install_command() -> &'static str {
     }
 }
 
+pub fn webkit_at_least(major: u32, minor: u32) -> bool {
+    let (ma, mi) = unsafe { (webkit2gtk::ffi::webkit_get_major_version(), webkit2gtk::ffi::webkit_get_minor_version()) };
+    (ma, mi) >= (major, minor)
+}
+
 pub fn nvidia() -> bool {
     Path::new("/proc/driver/nvidia").exists()
 }
@@ -181,6 +186,22 @@ pub fn nvidia() -> bool {
 pub fn wayland_session() -> bool {
     let x11_forced = std::env::var("GDK_BACKEND").is_ok_and(|b| b.starts_with("x11"));
     !x11_forced && (std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var("XDG_SESSION_TYPE").is_ok_and(|t| t == "wayland"))
+}
+
+pub fn gl_usable() -> bool {
+    use gtk::prelude::*;
+    thread_local! {
+        static USABLE: std::cell::OnceCell<bool> = const { std::cell::OnceCell::new() };
+    }
+    USABLE.with(|cell| {
+        *cell.get_or_init(|| {
+            let probe = gtk::Window::new(gtk::WindowType::Toplevel);
+            probe.realize();
+            let usable = probe.window().and_then(|w| w.create_gl_context().ok()).is_some_and(|context| context.realize().is_ok());
+            unsafe { probe.destroy() };
+            usable
+        })
+    })
 }
 
 pub fn dmabuf_disabled() -> bool {

@@ -23,7 +23,7 @@ struct State {
     mode: Option<Mode>,
     offset: f64,
     last_us: i64,
-    tick: Option<gtk::TickCallbackId>,
+    tick: Option<glib::SourceId>,
 }
 
 impl Default for State {
@@ -81,7 +81,13 @@ impl TitleBar {
             let mut s = self.state.borrow_mut();
             s.pattern = config.titlebar_pattern;
             s.animation = config.titlebar_animation;
-            s.fps = config.titlebar_fps.clamp(1, 60);
+            let fps = config.titlebar_fps.clamp(1, 60);
+            if s.fps != fps {
+                s.fps = fps;
+                if let Some(id) = s.tick.take() {
+                    id.remove();
+                }
+            }
         }
         self.sync_tick();
         self.header.queue_draw();
@@ -96,8 +102,16 @@ impl TitleBar {
         if animate && !running {
             self.state.borrow_mut().last_us = 0;
             let s = self.state.clone();
-            let id = self.header.add_tick_callback(move |widget, clock| {
-                tick(widget, clock, &mut s.borrow_mut());
+            let header = self.header.downgrade();
+            let interval = 1000 / self.state.borrow().fps.clamp(1, 60) as u64;
+            let id = glib::timeout_add_local(std::time::Duration::from_millis(interval), move || {
+                let Some(header) = header.upgrade() else {
+                    s.borrow_mut().tick = None;
+                    return glib::ControlFlow::Break;
+                };
+                if header.is_mapped() {
+                    tick(&header, &mut s.borrow_mut());
+                }
                 glib::ControlFlow::Continue
             });
             self.state.borrow_mut().tick = Some(id);
@@ -123,13 +137,10 @@ fn period(widget: &gtk::HeaderBar) -> f64 {
     })
 }
 
-fn tick(widget: &gtk::HeaderBar, clock: &gtk::gdk::FrameClock, s: &mut State) {
-    let now = clock.frame_time();
+fn tick(widget: &gtk::HeaderBar, s: &mut State) {
+    let now = glib::monotonic_time();
     if s.last_us == 0 {
         s.last_us = now;
-        return;
-    }
-    if now - s.last_us < 1_000_000 / s.fps.max(1) as i64 {
         return;
     }
     s.offset += (now - s.last_us) as f64 / 1e6 * DRIFT_PIXELS_PER_SECOND;

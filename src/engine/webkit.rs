@@ -47,6 +47,8 @@ pub struct WebKitEngine {
     managers: RefCell<Vec<glib::WeakRef<UserContentManager>>>,
     tor_port: u16,
     fingerprint_script: Option<webkit2gtk::UserScript>,
+    view_transition_guard: Option<webkit2gtk::UserScript>,
+    hold_script: webkit2gtk::UserScript,
     pub log_requests: std::cell::Cell<bool>,
     pub intercepting: std::cell::Cell<bool>,
     pub on_intercept: RefCell<Option<crate::engine::InterceptRoute>>,
@@ -158,7 +160,16 @@ impl WebKitEngine {
         } else {
             HardwareAccelerationPolicy::Never
         });
-        set_feature(&settings, "PDFJSViewerEnabled", true);
+        set_feature(&settings, "PDFJSViewer", true);
+        let view_transition_guard = (!config.hardware_acceleration || crate::system::dmabuf_disabled() || !crate::system::gl_usable()).then(|| {
+            webkit2gtk::UserScript::new(
+                "(() => { try { delete Document.prototype.startViewTransition; } catch (e) {} })();",
+                webkit2gtk::UserContentInjectedFrames::AllFrames,
+                webkit2gtk::UserScriptInjectionTime::Start,
+                &[],
+                &[],
+            )
+        });
         let user_agent = config.user_agent_for(mode);
         if let Some((ua, _)) = &user_agent {
             settings.set_user_agent(Some(ua));
@@ -225,6 +236,14 @@ impl WebKitEngine {
             managers: RefCell::new(Vec::new()),
             tor_port,
             fingerprint_script,
+            view_transition_guard,
+            hold_script: webkit2gtk::UserScript::new(
+                HOLD_JS,
+                webkit2gtk::UserContentInjectedFrames::AllFrames,
+                webkit2gtk::UserScriptInjectionTime::Start,
+                &[],
+                &[],
+            ),
             log_requests: std::cell::Cell::new(false),
             intercepting: std::cell::Cell::new(false),
             on_intercept: RefCell::new(None),
@@ -402,9 +421,66 @@ impl WebKitEngine {
         }
     }
 
-    fn new_content_manager(&self) -> UserContentManager {
+    pub fn set_intercepting(&self, on: bool) {
+        if self.intercepting.replace(on) == on {
+            return;
+        }
+        for ucm in self.managers.borrow().iter().filter_map(|w| w.upgrade()) {
+            webkit2gtk::UserContentManagerExt::remove_script(&ucm, &self.hold_script);
+            if on {
+                webkit2gtk::UserContentManagerExt::add_script(&ucm, &self.hold_script);
+            }
+        }
+        let script = if on { HOLD_JS } else { "if (window.__poeziHold) window.__poeziHold.on = false;" };
+        let views: Vec<WebView> = self.process_groups.borrow().iter().flat_map(|g| g.1.iter().filter_map(|w| w.upgrade())).collect();
+        for view in views {
+            view.evaluate_javascript(script, None, None, None::<&gtk::gio::Cancellable>, |_| {});
+        }
+    }
+
+    fn connect_hold_handler(self: &Rc<Self>, ucm: &UserContentManager) {
+        use gtk::glib::translate::ToGlibPtr;
+        let name = std::ffi::CString::new(HOLD_HANDLER).expect("handler name");
+        unsafe {
+            webkit2gtk::ffi::webkit_user_content_manager_register_script_message_handler_with_reply(ucm.to_glib_none().0, name.as_ptr(), std::ptr::null());
+        }
+        let engine = Rc::downgrade(self);
+        ucm.connect_local(&format!("script-message-with-reply-received::{HOLD_HANDLER}"), false, move |values| {
+            let message = values.get(1).and_then(|v| v.get::<javascriptcore::Value>().ok());
+            let reply = values.get(2).map(|v| unsafe { glib::gobject_ffi::g_value_get_boxed(v.to_glib_none().0) as *mut webkit2gtk::ffi::WebKitScriptMessageReply });
+            let (Some(message), Some(reply)) = (message, reply) else { return Some(false.to_value()) };
+            if reply.is_null() {
+                return Some(false.to_value());
+            }
+            let Some(context) = javascriptcore::ValueExt::context(&message) else { return Some(false.to_value()) };
+            let reply = HoldReply { reply: unsafe { webkit2gtk::ffi::webkit_script_message_reply_ref(reply) }, context };
+            let text = javascriptcore::ValueExt::to_str(&message);
+            let parsed: Option<serde_json::Value> = serde_json::from_str(text.as_str()).ok();
+            let field = |key: &str| parsed.as_ref().and_then(|v| v.get(key)).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+            let (method, url) = (field("method"), field("url"));
+            let route = engine.upgrade().filter(|e| e.intercepting.get()).and_then(|e| e.on_intercept.borrow().clone());
+            match route {
+                Some(route) if !url.is_empty() => route(crate::engine::Held::new(method, url, move |d| match d {
+                    crate::engine::HeldDecision::Forward => reply.send("forward"),
+                    crate::engine::HeldDecision::Drop => reply.send("drop"),
+                    crate::engine::HeldDecision::ForwardTo(target) => reply.send(&format!("to:{target}")),
+                })),
+                _ => reply.send("forward"),
+            }
+            Some(true.to_value())
+        });
+    }
+
+    fn new_content_manager(self: &Rc<Self>) -> UserContentManager {
         let ucm = UserContentManager::new();
+        self.connect_hold_handler(&ucm);
+        if self.intercepting.get() {
+            webkit2gtk::UserContentManagerExt::add_script(&ucm, &self.hold_script);
+        }
         webkit2gtk::UserContentManagerExt::add_script(&ucm, &self.media_fix);
+        if let Some(script) = &self.view_transition_guard {
+            webkit2gtk::UserContentManagerExt::add_script(&ucm, script);
+        }
         if let Some(script) = &self.fingerprint_script {
             webkit2gtk::UserContentManagerExt::add_script(&ucm, script);
         }
@@ -1174,6 +1250,28 @@ fn set_tor_proxy(data_manager: &WebsiteDataManager, port: u16) {
     let proxy = format!("socks5://{user}:poezi@127.0.0.1:{port}");
     let mut proxy_settings = NetworkProxySettings::new(Some(&proxy), &[]);
     data_manager.set_network_proxy_settings(NetworkProxyMode::Custom, Some(&mut proxy_settings));
+}
+
+const HOLD_HANDLER: &str = "poeziHold";
+const HOLD_JS: &str = include_str!("hold.js");
+
+struct HoldReply {
+    reply: *mut webkit2gtk::ffi::WebKitScriptMessageReply,
+    context: javascriptcore::Context,
+}
+
+impl HoldReply {
+    fn send(self, text: &str) {
+        use gtk::glib::translate::ToGlibPtr;
+        let value = javascriptcore::Value::new_string(&self.context, Some(text));
+        unsafe { webkit2gtk::ffi::webkit_script_message_reply_return_value(self.reply, value.to_glib_none().0) };
+    }
+}
+
+impl Drop for HoldReply {
+    fn drop(&mut self) {
+        unsafe { webkit2gtk::ffi::webkit_script_message_reply_unref(self.reply) };
+    }
 }
 
 fn set_feature(settings: &Settings, identifier: &str, enabled: bool) -> bool {

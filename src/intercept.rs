@@ -269,7 +269,7 @@ impl Intercept {
         notebook.append_page(&intr_outer, Some(&gtk::Label::new(Some("Intruder"))));
 
         let icept_toggle = gtk::CheckButton::with_label("Anfragen abfangen");
-        let icept_hint = gtk::Label::new(Some("Hält Seitenaufrufe und Formular-Sendungen an, bis du weiterleitest oder verwirfst (keine Hintergrund-/XHR-Anfragen)."));
+        let icept_hint = gtk::Label::new(Some("Hält Seitenaufrufe, Formulare und Hintergrund-Anfragen (fetch/XHR) an, bis du weiterleitest oder verwirfst. Bilder, Skripte und Stylesheets lassen sich nur in Chromium-Tabs anhalten."));
         icept_hint.set_xalign(0.0);
         icept_hint.set_line_wrap(true);
         icept_hint.style_context().add_class("tool-caption");
